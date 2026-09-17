@@ -156,8 +156,80 @@ Each student has proposed three project ideas.
 
 ---
 
-# Student 3: [Enter Name]
+# Student 3: Wendy Nguyen
 
+## 7. Distributed Inventory Management System
+
+**Problem:** Build a system that tracks product inventory across multiple warehouses and processes simultaneous stock updates without overselling products.
+
+**What It Demonstrates:**
+
+- REST or gRPC communication between services
+- Data partitioning by warehouse
+- Distributed caching of inventory information
+- Concurrent stock-update handling
+- Asynchronous restocking and low-stock events
+- Fault tolerance and failure recovery
+
+**Suggested Stack:** React, Java Spring Boot or Node.js, PostgreSQL, Redis, Kafka or RabbitMQ, and Docker Compose.
+
+**Stretch Goals:**
+
+- Add automatic low-stock alerts
+- Transfer inventory between warehouses
+- Simulate warehouse-service failures
+- Compare strong and eventual consistency
+- Measure inventory-update latency under heavy traffic
+
+---
+
+## 8. Distributed Event Ticketing and Seat-Reservation System
+
+**Problem:** Build a system that allows users to browse events, temporarily hold seats, and complete reservations without selling the same seat to multiple users.
+
+**What It Demonstrates:**
+
+- REST APIs for event and reservation services
+- Distributed locking or atomic seat updates
+- Asynchronous payment and confirmation processing
+- Distributed caching of event and seat information
+- Fault recovery and idempotent request handling
+- Concurrent booking management
+
+**Suggested Stack:** React, Java Spring Boot or Node.js, PostgreSQL, Redis, Kafka or RabbitMQ, and Docker Compose.
+
+**Stretch Goals:**
+
+- Add temporary seat holds with automatic expiration
+- Simulate payment-service failures
+- Perform concurrent-booking load tests
+- Add monitoring for booking success rates and latency
+- Add a waitlist for sold-out events
+
+---
+
+## 9. Real-Time Smart Parking Reservation System
+
+**Problem:** Build a system that allows drivers to view parking availability and reserve a space while processing simulated real-time parking updates.
+
+**What It Demonstrates:**
+
+- REST or gRPC communication between services
+- Asynchronous processing of simulated sensor events
+- Distributed caching of parking availability
+- Concurrent reservation handling
+- Load balancing and horizontal scaling
+- Fault tolerance when services or simulated sensors fail
+
+**Suggested Stack:** React, Java Spring Boot or Node.js, PostgreSQL, Redis, Kafka or RabbitMQ, and Docker Compose.
+
+**Stretch Goals:**
+
+- Add automatic expiration of unused reservations
+- Simulate parking-sensor failures
+- Add location-based parking searches
+- Measure availability-update and reservation latency
+- Add simulated payment processing
 
 ---
 
