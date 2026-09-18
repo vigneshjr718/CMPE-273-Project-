@@ -233,6 +233,79 @@ Each student has proposed three project ideas.
 
 ---
 
+# Student 4: Alicia Kim
+
+## 10. Package Tracking System
+
+**Problem:** Build a system that allows users to create package deliveries, check delivery status, and receive updates when the package status changes.
+
+**What It Demonstrates:**
+
+- REST communication between services
+- Asynchronous status updates
+- Event-driven messaging
+- Data consistency between services
+- Fault tolerance and retry handling
+
+**Suggested Stack:** Python Flask or Node.js, PostgreSQL, RabbitMQ, and Docker Compose.
+
+**Stretch Goals:**
+
+- Add delivery notifications
+- Simulate delayed status updates
+- Simulate service failures
+- Add retries for failed messages
+- Add simple logging and monitoring
+
+---
+
+## 11. Campus Study-Room Reservation System
+
+**Problem:** Build a system that allows students to search for available study rooms and reserve a room for a selected date and time.
+
+**What It Demonstrates:**
+
+- REST communication between services
+- Concurrent reservation handling
+- Consistent room availability
+- Service failure and recovery
+- Containerized microservices
+
+**Suggested Stack:** Python Flask or Node.js, PostgreSQL, Redis, and Docker Compose.
+
+**Stretch Goals:**
+
+- Add automatic expiration of reservations
+- Send reservation notifications
+- Simulate two users booking the same room
+- Add simple logging and monitoring
+
+---
+
+## 12. Distributed Team Task Management System
+
+**Problem:** Build a simple task-management system where users can create, assign, update, and complete tasks while different services handle task data and notifications.
+
+**What It Demonstrates:**
+
+- REST communication between services
+- Asynchronous notifications
+- Event-driven updates
+- Fault tolerance
+- Logging and service monitoring
+
+**Suggested Stack:** Python Flask or Node.js, PostgreSQL, RabbitMQ, and Docker Compose.
+
+**Stretch Goals:**
+
+- Add task deadlines
+- Send notifications when tasks are completed
+- Simulate notification-service failures
+- Add retries for failed messages
+- Add a simple activity history
+
+---
+
 # Common Themes Across All Projects
 
 Each project explores multiple CMPE 273 concepts, including:
