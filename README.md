@@ -49,63 +49,8 @@ The system also uses **Kafka** to send order and delivery information between se
 ---
 
 ## Proposed Architecture Diagram
-flowchart TB
-    Shop["Body Shop / Client"]
+<img width="3304" height="2632" alt="mermaid-diagram" src="https://github.com/user-attachments/assets/84b51dd7-c5c7-4bbb-a37e-7acfa470e8c8" />
 
-    Order["Order Service<br/>Receives parts list"]
-    Coordinator["Order Coordinator<br/>Parallel reservations<br/>Saga replacement logic"]
-
-    Seller1["Seller Service 1"]
-    Seller2["Seller Service 2"]
-    Seller3["Seller Service 3"]
-    Seller4["Seller Service 4"]
-    Seller5["Seller Service 5"]
-
-    DB1[("Seller 1 DB")]
-    DB2[("Seller 2 DB")]
-    DB3[("Seller 3 DB")]
-    DB4[("Seller 4 DB")]
-    DB5[("Seller 5 DB")]
-
-    Kafka[["Apache Kafka<br/>Order and delivery events"]]
-
-    Tracker["Delivery Tracker<br/>Records reservation updates"]
-    TrackerDB[("Delivery Tracker DB")]
-
-    Status["Order Status API<br/>FastAPI documentation"]
-
-    Shop -->|Submit parts list| Order
-    Order -->|Create order| Coordinator
-
-    Coordinator -->|REST: reserve parts| Seller1
-    Coordinator -->|REST: reserve parts| Seller2
-    Coordinator -->|REST: reserve parts| Seller3
-    Coordinator -->|REST: reserve parts| Seller4
-    Coordinator -->|REST: reserve parts| Seller5
-
-    Seller1 --> DB1
-    Seller2 --> DB2
-    Seller3 --> DB3
-    Seller4 --> DB4
-    Seller5 --> DB5
-
-    Seller1 -->|Reserved, late, delivered| Kafka
-    Seller2 -->|Reserved, late, delivered| Kafka
-    Seller3 -->|Reserved, late, delivered| Kafka
-    Seller4 -->|Reserved, late, delivered| Kafka
-    Seller5 -->|Reserved, late, delivered| Kafka
-
-    Kafka --> Tracker
-    Kafka --> Status
-    Tracker --> TrackerDB
-
-    Coordinator -.->|Cancel late reservation<br/>and try another seller| Seller1
-    Coordinator -.->|Cancel and replace| Seller2
-    Coordinator -.->|Cancel and replace| Seller3
-    Coordinator -.->|Cancel and replace| Seller4
-    Coordinator -.->|Cancel and replace| Seller5
-
-    Status -->|Read order and delivery status| TrackerDB
 ---
 
 ## Project Scope
