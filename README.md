@@ -1,324 +1,85 @@
-# CMPE 273 — Enterprise Distributed Systems (Fall 2026)
+# PartStream / ApexParts
+### A System That Helps Body Shops Get Car Repair Parts Faster
 
-## Course Project Ideas
+**CMPE 273 — Enterprise Distributed Systems (Fall 2026), Section 01**
+**San José State University · Instructor: Rakesh Ranjan**
 
-**San José State University**  
-**CMPE 273 — Section 01**  
-**Instructor: Rakesh Ranjan**  
-**Project Proposal: Three Ideas per Student**
-
-This repository contains twelve candidate project ideas for CMPE 273. Each project focuses on enterprise distributed-system concepts, including RPC, asynchronous messaging, web services, data replication, partitioning, consistency, scalability, and fault tolerance.
-
-Each student has proposed three project ideas.
+**Team:** Soumya Atluri · Vignesh Jetty Ravi · Wendy Nguyen · Alicia Kim
 
 ---
 
-# Student 1: Soumya Atluri
+## Title
 
-## 1. Distributed URL Shortener with Consistent Hashing
-
-**Problem:** Build a URL-shortening service that remains fast and available as traffic and stored data increase.
-
-**What It Demonstrates:**
-
-- Consistent hashing for data partitioning
-- Redis caching for frequently accessed links
-- REST API design
-- Horizontal scaling
-- Read/write load testing
-
-**Suggested Stack:** Java, Go, or Node.js; Redis; Cassandra or DynamoDB-style storage; Docker Compose.
-
-**Stretch Goals:**
-
-- Add a Bloom filter
-- Simulate node failure and recovery
-- Add API-key rate limiting
-- Add link expiration and analytics
+**PartStream / ApexParts — A Marketplace for Fast Car Repair Parts**
 
 ---
 
-## 2. Real-Time Ride-Hailing Dispatch System
+## Abstract
 
-**Problem:** Match riders with nearby drivers while processing continuous location updates from thousands of simulated drivers.
+After a car accident, a body shop may need many different parts to repair a car. Sometimes, one missing or late part can delay the whole repair for days or even weeks.
 
-**What It Demonstrates:**
+ApexParts is a system that helps body shops get the parts they need on time. When a body shop sends a parts list, the system checks five different sellers at the same time to find available parts.
 
-- gRPC communication
-- Geohashing or geo-sharding
-- Kafka or RabbitMQ messaging
-- Redis geospatial queries
-- Eventual consistency
+If a seller cannot deliver a part on time, the system cancels that part from the order and tries another seller. It keeps doing this until it finds a seller that can deliver the part within two days. This process uses the **Saga pattern** to handle changes between different sellers.
 
-**Suggested Stack:** Java or Go gRPC services, Kafka, Redis, Docker Compose, and a map-based frontend.
-
-**Stretch Goals:**
-
-- Add surge pricing
-- Simulate network partitions
-- Measure matching latency
-- Add driver and trip status tracking
+The system also uses **Kafka** to send order and delivery information between services. Each part has a deadline based on when it is needed during the repair. This helps the system choose a seller that can deliver the part before the repair needs it.
 
 ---
 
-## 3. Distributed Rate Limiter and API Gateway
+## Business Value
 
-**Problem:** Build a shared API gateway that protects backend services from overload while enforcing limits across multiple gateway instances.
-
-**What It Demonstrates:**
-
-- Token-bucket and sliding-window algorithms
-- Redis-backed distributed counters
-- Circuit breakers
-- Retry and backoff strategies
-- Reverse-proxy routing
-
-**Suggested Stack:** Node.js, Go, or Java; Redis; Docker Compose; REST APIs; k6.
-
-**Stretch Goals:**
-
-- Add per-tenant quotas
-- Build a monitoring dashboard
-- Compare rate-limiting algorithms
-- Add authentication and API-key management
+- **Faster repairs:** Body shops can get the parts they need faster, so cars do not have to stay in the shop for weeks.
+- **More room in the shop:** Cars waiting for missing parts take up space. Getting parts on time helps body shops use their repair space better.
+- **More seller options:** Body shops can check parts from different sellers in one system instead of contacting each seller separately.
+- **Lower rental car costs:** Faster repairs can reduce the number of days insurance companies need to pay for rental cars.
+- **Better tracking:** Body shops can easily check the status of each part and see when it should arrive.
 
 ---
 
-# Student 2: Vignesh Jetty Ravi
+## Main Parts of the System
 
-## 4. Distributed Key-Value Store with Raft Consensus
-
-**Problem:** Build a distributed key-value store that remains consistent when individual nodes fail.
-
-**What It Demonstrates:**
-
-- Raft leader election
-- Log replication
-- Quorum reads and writes
-- Fault tolerance
-- CAP-theorem tradeoffs
-- Inter-node RPC communication
-
-**Suggested Stack:** Go or Java, gRPC, Docker Compose, and HashiCorp Raft or a custom Raft implementation.
-
-**Stretch Goals:**
-
-- Add snapshotting and log compaction
-- Visualize leader elections
-- Simulate network partitions
-- Add a client-facing REST API
+| Service | What It Does |
+|---|---|
+| **Order Service** | Takes a parts list from the body shop. Each part has a "needed by" date. |
+| **Order Coordinator** | The heart of the project. Asks all sellers, splits the order between the fastest ones, and replaces any part that will be late. |
+| **Seller Services (5)** | Five fake sellers built from the same code with different settings. Each has its own database. We can make them slow or crash on purpose. |
+| **Delivery Tracker** | Listens to Kafka and records updates like "reserved," "late," "replaced," and "delivered." |
+| **Order Status API** | Shows each order and which seller is sending each part (viewed through FastAPI's built-in docs page). |
 
 ---
 
-## 5. E-Commerce Order Processing with the Saga Pattern
-
-**Problem:** Coordinate inventory, payment, and shipping services without using a single distributed transaction.
-
-**What It Demonstrates:**
-
-- Choreography and orchestration-based Sagas
-- Kafka or RabbitMQ messaging
-- Compensating transactions
-- Microservice decomposition
-- Database-per-service architecture
-
-**Suggested Stack:** Spring Boot, Node.js, or Go; Kafka or RabbitMQ; PostgreSQL; Docker Compose.
-
-**Stretch Goals:**
-
-- Compare Saga processing with two-phase commit
-- Inject random service failures
-- Add distributed tracing
-- Implement idempotent event processing
+## Proposed Architecture Diagram
 
 ---
 
-## 6. Distributed Job Scheduler and Task Queue
+## Project Scope
 
-**Problem:** Build a system where clients submit jobs and worker nodes execute them with failure detection and job reassignment.
+**What we will build**
 
-**What It Demonstrates:**
+- A body shop sends a parts list (we use sample lists instead of real crash photos).
+- The coordinator reserves parts from 5 sellers at the same time.
+- If a seller is late or fails, the coordinator cancels that part and orders it from another seller.
+- Every step is sent as a Kafka event, so the order is never lost even if a service restarts.
+- The same message processed twice does not create a double order.
+- Tests that turn off sellers or slow them down to show the system still works.
 
-- Leader election
-- Distributed queues
-- At-least-once or exactly-once processing
-- Worker load balancing
-- Heartbeat-based failure detection
+**Extra goals (only if we have time)**
 
-**Suggested Stack:** Kafka or RabbitMQ, Java/Go/Python workers, ZooKeeper or etcd, Docker Compose.
-
-**Stretch Goals:**
-
-- Add job priorities
-- Add retries with exponential backoff
-- Build a job-monitoring dashboard
-- Simulate worker crashes
+- Use an AI model to find parts from crash photos
+- A full shop schedule that plans each repair step
+- Try Apache Iggy instead of Kafka
+- Monitoring charts with Prometheus and Grafana
+- A simple web dashboard
 
 ---
 
-# Student 3: Wendy Nguyen
+## Proposed Technology
 
-## 7. Distributed Inventory Management System
-
-**Problem:** Build a system that tracks product inventory across multiple warehouses and processes simultaneous stock updates without overselling products.
-
-**What It Demonstrates:**
-
-- REST or gRPC communication between services
-- Data partitioning by warehouse
-- Distributed caching of inventory information
-- Concurrent stock-update handling
-- Asynchronous restocking and low-stock events
-- Fault tolerance and failure recovery
-
-**Suggested Stack:** React, Java Spring Boot or Node.js, PostgreSQL, Redis, Kafka or RabbitMQ, and Docker Compose.
-
-**Stretch Goals:**
-
-- Add automatic low-stock alerts
-- Transfer inventory between warehouses
-- Simulate warehouse-service failures
-- Compare strong and eventual consistency
-- Measure inventory-update latency under heavy traffic
-
----
-
-## 8. Distributed Event Ticketing and Seat-Reservation System
-
-**Problem:** Build a system that allows users to browse events, temporarily hold seats, and complete reservations without selling the same seat to multiple users.
-
-**What It Demonstrates:**
-
-- REST APIs for event and reservation services
-- Distributed locking or atomic seat updates
-- Asynchronous payment and confirmation processing
-- Distributed caching of event and seat information
-- Fault recovery and idempotent request handling
-- Concurrent booking management
-
-**Suggested Stack:** React, Java Spring Boot or Node.js, PostgreSQL, Redis, Kafka or RabbitMQ, and Docker Compose.
-
-**Stretch Goals:**
-
-- Add temporary seat holds with automatic expiration
-- Simulate payment-service failures
-- Perform concurrent-booking load tests
-- Add monitoring for booking success rates and latency
-- Add a waitlist for sold-out events
-
----
-
-## 9. Real-Time Smart Parking Reservation System
-
-**Problem:** Build a system that allows drivers to view parking availability and reserve a space while processing simulated real-time parking updates.
-
-**What It Demonstrates:**
-
-- REST or gRPC communication between services
-- Asynchronous processing of simulated sensor events
-- Distributed caching of parking availability
-- Concurrent reservation handling
-- Load balancing and horizontal scaling
-- Fault tolerance when services or simulated sensors fail
-
-**Suggested Stack:** React, Java Spring Boot or Node.js, PostgreSQL, Redis, Kafka or RabbitMQ, and Docker Compose.
-
-**Stretch Goals:**
-
-- Add automatic expiration of unused reservations
-- Simulate parking-sensor failures
-- Add location-based parking searches
-- Measure availability-update and reservation latency
-- Add simulated payment processing
-
----
-
-# Student 4: Alicia Kim
-
-## 10. Package Tracking System
-
-**Problem:** Build a system that allows users to create package deliveries, check delivery status, and receive updates when the package status changes.
-
-**What It Demonstrates:**
-
-- REST communication between services
-- Asynchronous status updates
-- Event-driven messaging
-- Data consistency between services
-- Fault tolerance and retry handling
-
-**Suggested Stack:** Python Flask or Node.js, PostgreSQL, RabbitMQ, and Docker Compose.
-
-**Stretch Goals:**
-
-- Add delivery notifications
-- Simulate delayed status updates
-- Simulate service failures
-- Add retries for failed messages
-- Add simple logging and monitoring
-
----
-
-## 11. Campus Study-Room Reservation System
-
-**Problem:** Build a system that allows students to search for available study rooms and reserve a room for a selected date and time.
-
-**What It Demonstrates:**
-
-- REST communication between services
-- Concurrent reservation handling
-- Consistent room availability
-- Service failure and recovery
-- Containerized microservices
-
-**Suggested Stack:** Python Flask or Node.js, PostgreSQL, Redis, and Docker Compose.
-
-**Stretch Goals:**
-
-- Add automatic expiration of reservations
-- Send reservation notifications
-- Simulate two users booking the same room
-- Add simple logging and monitoring
-
----
-
-## 12. Distributed Team Task Management System
-
-**Problem:** Build a simple task-management system where users can create, assign, update, and complete tasks while different services handle task data and notifications.
-
-**What It Demonstrates:**
-
-- REST communication between services
-- Asynchronous notifications
-- Event-driven updates
-- Fault tolerance
-- Logging and service monitoring
-
-**Suggested Stack:** Python Flask or Node.js, PostgreSQL, RabbitMQ, and Docker Compose.
-
-**Stretch Goals:**
-
-- Add task deadlines
-- Send notifications when tasks are completed
-- Simulate notification-service failures
-- Add retries for failed messages
-- Add a simple activity history
-
----
-
-# Common Themes Across All Projects
-
-Each project explores multiple CMPE 273 concepts, including:
-
-- RPC and object request broker-style communication
-- REST and web-service APIs
-- Asynchronous messaging
-- Data partitioning and replication
-- Distributed caching
-- Leader election and consensus
-- Fault tolerance and failure recovery
-- CAP-theorem tradeoffs
-- Load balancing and horizontal scaling
-- Monitoring, logging, and performance analysis
-
-All projects are scoped so that a working end-to-end implementation can be deployed using Docker Compose during the semester. Stretch goals provide opportunities to explore advanced distributed-system concepts, performance improvements, and failure scenarios.
+| Area | Technology |
+|---|---|
+| **Services** | Python FastAPI |
+| **Talking between services** | REST APIs |
+| **Sending messages** | Apache Kafka |
+| **Database** | PostgreSQL (one server, a separate database for each service) |
+| **Testing** | Python test scripts (send many orders, stop or slow sellers) |
+| **Running everything** | Docker Compose |
