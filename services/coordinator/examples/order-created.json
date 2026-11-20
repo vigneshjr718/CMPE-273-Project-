@@ -1,0 +1,18 @@
+{
+  "event_id": "21dae5fe-cbe7-4bac-87ba-76e8df813a84",
+  "event_type": "order.created",
+  "schema_version": 1,
+  "producer": "order",
+  "occurred_at": "2030-01-01T00:00:00Z",
+  "payload": {
+    "order_id": "demo-order-001",
+    "lines": [
+      {
+        "line_id": "line-1",
+        "part_id": "bumper",
+        "quantity": 2,
+        "needed_by": "2030-01-03T00:00:00Z"
+      }
+    ]
+  }
+}
