@@ -93,3 +93,39 @@ def test_postgres_migration_sql_compiles():
     )
     assert "CREATE TABLE workflows" in result.stdout
     assert "CREATE TABLE outbox" in result.stdout
+    assert "CREATE TABLE delivery_checks" in result.stdout
+
+
+async def test_upgrade_from_reservations_preserves_saved_business_state(tmp_path):
+    from datetime import datetime, timezone
+    from app.models import DeliveryCheck, LineAttempt, WorkflowLine
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'existing-reservation.db'}"
+    env = {**os.environ, "COORDINATOR_DATABASE_URL": url}
+    subprocess.run([sys.executable, "-m", "alembic", "upgrade", "0002_reservation_flow"],
+                   cwd=ROOT, env=env, check=True, capture_output=True, text=True)
+    engine = create_async_engine(url)
+    sessions = async_sessionmaker(engine)
+    try:
+        async with sessions.begin() as session:
+            session.add(Workflow(order_id="saved-order", payload={}, status="RESERVED", state_version=5))
+            await session.flush()
+            session.add(LineAttempt(
+                attempt_id="saved-attempt", order_id="saved-order", line_id="line-1",
+                seller_id="seller-1", attempt_number=1, operation_key="saved-key",
+                status="RESERVED", reservation_id="saved-reservation"))
+            session.add(WorkflowLine(
+                order_id="saved-order", line_id="line-1", part_id="bumper", quantity=1,
+                needed_by=datetime(2030, 1, 2, tzinfo=timezone.utc), status="RESERVED",
+                current_attempt_id="saved-attempt", attempt_count=1))
+        subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"],
+                       cwd=ROOT, env=env, check=True, capture_output=True, text=True)
+        await check_database(engine)
+        async with sessions() as session:
+            workflow = await session.get(Workflow, "saved-order")
+            assert workflow.status == "RESERVED" and workflow.state_version == 5
+            attempt = await session.get(LineAttempt, "saved-attempt")
+            assert attempt.operation_key == "saved-key" and attempt.reservation_id == "saved-reservation"
+            assert await session.scalar(select(func.count()).select_from(DeliveryCheck)) == 0
+    finally:
+        await engine.dispose()

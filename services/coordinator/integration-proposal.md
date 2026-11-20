@@ -91,3 +91,32 @@ A: Please supply order.created schema/example and required fields.
 C: Please confirm quote, reserve, lookup and cancel/fencing wire contracts.
 D: Please confirm topics, partition keys, envelope and version semantics, plus
 coordinator_db role and internal connection/service names with C.
+
+## Delivery observations: additional draft for C/D review
+
+GET /reservations/{reservation_id}/delivery returns seller_id, operation_key,
+reservation_id, part_id, quantity, status (IN_TRANSIT or DELIVERED), status_version,
+estimated_delivery_at and delivered_at. IN_TRANSIT requires an aware ETA and no
+delivery timestamp. DELIVERED requires an aware delivered_at timestamp.
+
+status_version must be a strictly increasing integer PER RESERVATION when the
+observation changes, stable on repeated identical reads and never reset while
+that reservation exists, including after seller restart. B uses this counter,
+not wall-clock timestamps, to reject stale/conflicting replies. This requirement
+is a proposal to C, NOT a verified feature of C's implementation. If the agreed
+API differs, translate it in app/clients/delivery.py and revisit version safety
+before live integration. Do not derive an ordering counter from timestamps.
+
+The adapter checks the exact saved seller/key/reservation/part/quantity. 404,
+timeouts and malformed replies are observation failures, not cancellation or
+delivery proof. Only known RESERVED attempts are polled. Cancellation and
+replacement remain separate work; polling does not create reservation attempts.
+
+Events proposed for D: line.delivery_updated, line.delivery_delayed,
+line.delivery_check_deferred and line.delivered. Same per-order B state_version
+and outbox protocol. Added per-line snapshot fields expose the last known
+delivery observation, source version, poll failure and next scheduled check.
+Repeated identical observations/failures do not create duplicate progress events.
+Confirmed all-line delivery produces order FULFILLED; a mix of delivered and
+unfulfilled lines produces PARTIALLY_FULFILLED. DELIVERED_AFTER_DEADLINE remains
+visible as a lateness reason even when all actual deliveries are complete.

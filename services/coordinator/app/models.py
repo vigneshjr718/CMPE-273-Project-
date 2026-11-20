@@ -69,6 +69,27 @@ class WorkflowLine(Base):
     )
 
 
+class DeliveryCheck(Base):
+    __tablename__ = "delivery_checks"
+    attempt_id: Mapped[str] = mapped_column(ForeignKey("line_attempts.attempt_id"), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("workflows.order_id"))
+    line_id: Mapped[str] = mapped_column(String(128))
+    poll_count: Mapped[int] = mapped_column(Integer, default=0)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(80))
+    status_version: Mapped[int | None] = mapped_column(Integer)
+    last_payload: Mapped[dict | None] = mapped_column(JSON)
+    __table_args__ = (
+        CheckConstraint("poll_count >= 0"),
+        CheckConstraint("failure_count >= 0"),
+        CheckConstraint("status_version IS NULL OR status_version >= 1"),
+        Index("ix_delivery_checks_due", "next_poll_at"),
+    )
+
+
 class ProcessedEvent(Base):
     __tablename__ = "processed_events"
     event_id: Mapped[str] = mapped_column(String(36), primary_key=True)
