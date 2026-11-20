@@ -66,7 +66,7 @@ Topic names/order keys and actual workflow event envelope/names remain pending.
 The schema's unique (order_id, state_version) constraint encodes this proposal.
 
 ## Draft state guards
-UNKNOWN -> RECONCILING; no direct UNKNOWN -> UNFULFILLED or REPLACING.
+UNKNOWN -> RECONCILING or CANCELLATION_PENDING; no direct UNKNOWN -> UNFULFILLED or REPLACING.
 RESERVED -> CANCELLATION_PENDING before REPLACING.
 CANCELLATION_PENDING -> REPLACING requires durable proof of cancellation.
 CANCELLATION_PENDING -> DELIVERED requires confirmed delivery instead.
@@ -120,3 +120,27 @@ Repeated identical observations/failures do not create duplicate progress events
 Confirmed all-line delivery produces order FULFILLED; a mix of delivered and
 unfulfilled lines produces PARTIALLY_FULFILLED. DELIVERED_AFTER_DEADLINE remains
 visible as a lateness reason even when all actual deliveries are complete.
+
+
+## Checkpoint 6: terminal fencing and replacement proposal
+
+See [REPLACEMENT.md](REPLACEMENT.md) for the complete provisional cancellation
+endpoint, payload, terminal receipt and shared source-version requirements.
+No C implementation was available on the inspected remote branches on November
+20, 2026; these guarantees remain unapproved and unverified against C.
+UNKNOWN may enter CANCELLATION_PENDING when the manual replacement command
+explicitly requests fencing by original operation key. No reservation ID is
+needed to request that fence; 404 is never a substitute for terminal proof.
+
+A CANCELLED response must prove no past delivery and no possible future effect
+from the original operation, including in-flight requests and replays. If C
+cannot guarantee this, cancellation remains PENDING and no safe replacement
+is confirmed. B persists proof and revalidates it before every successor write.
+A quote-only RECONCILIATION_REQUIRED line can resume QUOTING for replacement
+only when all previous attempts are rejected or have valid cancellation proof.
+
+Additional D events: line.cancelling, line.cancellation_deferred, line.cancelled,
+line.replacement_started. Existing line.reserving adds replaces_attempt_id.
+Current-attempt snapshots add cancellation status/key/count/error/receipt and
+next retry. Prior attempts and receipts remain auditable after ownership changes.
+All event/state transitions retain the same local transaction/outbox rules.

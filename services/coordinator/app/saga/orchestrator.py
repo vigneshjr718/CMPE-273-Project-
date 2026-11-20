@@ -8,8 +8,9 @@ from uuid import uuid4
 import httpx
 from sqlalchemy import select
 
+from app.clients.cancellation import require_cancelled
 from app.clients.reservations import ReservationClient, validate_reply
-from app.models import DeliveryCheck, LineAttempt, OutboxEvent, Workflow, WorkflowLine
+from app.models import CancellationCheck, DeliveryCheck, LineAttempt, OutboxEvent, Workflow, WorkflowLine
 from app.saga.keys import reservation_key
 from app.saga.selection import collect_quotes
 from app.saga.states import LineState, require_transition
@@ -169,7 +170,18 @@ class Coordinator:
         async with self.sessions.begin() as session:
             workflow = await self._workflow(session, order_id)
             row = await session.get(WorkflowLine, (order_id, line.line_id))
+            # Guard every path, including the normal CLI resuming QUOTING.
+            previous = list(await session.scalars(select(LineAttempt).where(
+                LineAttempt.order_id == order_id, LineAttempt.line_id == line.line_id)))
+            for old in previous:
+                if old.status == "CANCELLED":
+                    require_cancelled(old, await session.get(CancellationCheck, old.attempt_id), line)
+                elif old.status != "REJECTED":
+                    raise ValueError("an unresolved previous attempt blocks a new reservation")
             require_transition(LineState(row.status), LineState.RESERVING)
+            replaces = next((old.attempt_id for old in sorted(
+                previous, key=lambda old: old.attempt_number, reverse=True)
+                if old.status == "CANCELLED"), None)
             number = row.attempt_count + 1
             key = reservation_key(order_id, line.line_id, seller_id, number)
             attempt_id = str(uuid4())
@@ -187,6 +199,7 @@ class Coordinator:
                 "quantity": line.quantity, "line_status": "RESERVING",
                 "status": "PROCESSING", "attempt_id": attempt_id,
                 "seller_id": seller_id, "operation_key": key,
+                "replaces_attempt_id": replaces,
             })
             # Both commit BEFORE the seller request is even invoked.
             return attempt_id, key
@@ -204,8 +217,11 @@ class Coordinator:
             return
         if state == "PENDING":
             await self._set_state(order_id, line.line_id, "QUOTING", "line.quoting")
+        async with self.sessions() as session:
+            used = set(await session.scalars(select(LineAttempt.seller_id).where(
+                LineAttempt.order_id == order_id, LineAttempt.line_id == line.line_id)))
         result = await collect_quotes(
-            self.client, self.seller_ids, line, now=self.clock(),
+            self.client, [sid for sid in self.seller_ids if sid not in used], line, now=self.clock(),
             timeout_seconds=self.timeout, concurrency=self.concurrency,
         )
         if not result.eligible:
@@ -278,6 +294,8 @@ class Coordinator:
                            if row.current_attempt_id else None)
                 delivery = (await session.get(DeliveryCheck, row.current_attempt_id)
                             if row.current_attempt_id else None)
+                cancellation = (await session.get(CancellationCheck, row.current_attempt_id)
+                                if row.current_attempt_id else None)
                 observation = delivery.last_payload if delivery and delivery.last_payload else {}
                 values.append({
                     "line_id": row.line_id, "part_id": row.part_id,
@@ -292,6 +310,13 @@ class Coordinator:
                     "retry_count": attempt.retry_count if attempt else 0,
                     "next_retry_at": (as_utc(attempt.next_retry_at).isoformat()
                                       if attempt and attempt.next_retry_at else None),
+                    "cancellation_status": cancellation.status if cancellation else None,
+                    "cancellation_key": cancellation.cancellation_key if cancellation else None,
+                    "cancellation_requests": cancellation.request_count if cancellation else 0,
+                    "cancellation_error": cancellation.last_error if cancellation else None,
+                    "cancellation_receipt": (cancellation.last_payload or {}).get("cancellation_receipt") if cancellation else None,
+                    "next_cancellation_retry_at": (as_utc(cancellation.next_retry_at).isoformat()
+                                                   if cancellation and cancellation.next_retry_at else None),
                     "delivery_status": observation.get("status"),
                     "delivery_status_version": delivery.status_version if delivery else None,
                     "delivered_at": observation.get("delivered_at"),

@@ -12,7 +12,7 @@ from app.clients.reservations import ReservationReply
 from app.config import Settings
 from app.consumers.order_created import accept_order
 from app.db import check_database, make_engine, make_sessions
-from app.models import DeliveryCheck, LineAttempt, OutboxEvent, ProcessedEvent, Workflow, WorkflowLine
+from app.models import CancellationCheck, DeliveryCheck, LineAttempt, OutboxEvent, ProcessedEvent, Workflow, WorkflowLine
 from app.saga.locking import OrderBusy, postgres_order_lock
 from app.saga.orchestrator import Coordinator
 from app.schemas import OrderCreatedEvent, Quote
@@ -35,7 +35,7 @@ async def postgres():
             if ids:
                 async with engine.begin() as connection:
                     # Exact generated IDs only, not a database/table-wide reset.
-                    for model in (DeliveryCheck, OutboxEvent, ProcessedEvent, LineAttempt, WorkflowLine, Workflow):
+                    for model in (CancellationCheck, DeliveryCheck, OutboxEvent, ProcessedEvent, LineAttempt, WorkflowLine, Workflow):
                         await connection.execute(delete(model).where(model.order_id.in_(ids)))
         finally:
             await engine.dispose()
@@ -291,6 +291,87 @@ async def test_postgres_delivery_claim_saved_before_http_and_order_lock_excludes
         release.set()
         await first
         assert seller.delivery_calls == 1
+    finally:
+        release.set()
+        if not first.done():
+            first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+
+
+async def test_postgres_lost_cancellation_reply_recovers_same_key_then_replaces(postgres):
+    from app.pollers.delivery_poller import DeliveryPoller
+    from app.saga.replacement import ReplacementCoordinator
+    from app.tools.demo_replacement import FencingDemoSellers
+
+    engine, sessions, ids = postgres
+    event = make_event(ids)
+    order_id = event.payload.order_id
+    now = [datetime.now(timezone.utc)]
+    seller = FencingDemoSellers(lambda: now[0])
+    def coordinator():
+        return Coordinator(sessions, seller, ["seller-1", "seller-2"],
+            lock=lambda oid: postgres_order_lock(engine, oid),
+            workflow_topic="workflow.events", clock=lambda: now[0], timeout_seconds=10)
+    await accept_order(event, sessions, workflow_topic="workflow.events")
+    await coordinator().run_order(order_id)
+    await DeliveryPoller(coordinator(), seller).run_order(order_id)
+    pending = await ReplacementCoordinator(coordinator(), seller).run_order(order_id)
+    assert pending["lines"][0]["status"] == "CANCELLATION_PENDING" and seller.reserve_calls == 1
+    assert await ReplacementCoordinator(coordinator(), seller).run_order(order_id) == pending
+    now[0] += timedelta(seconds=2)
+    result = await ReplacementCoordinator(coordinator(), seller).run_order(order_id)
+    assert result["status"] == "RESERVED" and result["lines"][0]["seller_id"] == "seller-2"
+    assert await ReplacementCoordinator(coordinator(), seller).run_order(order_id) == result
+    assert seller.reserve_calls == seller.cancel_calls == 2
+    async with sessions() as session:
+        attempts = list(await session.scalars(select(LineAttempt).where(
+            LineAttempt.order_id == order_id).order_by(LineAttempt.attempt_number)))
+        check = await session.get(CancellationCheck, attempts[0].attempt_id)
+        assert [a.status for a in attempts] == ["CANCELLED", "RESERVED"]
+        assert check.request_count == 2 and check.status == "CONFIRMED"
+        assert check.last_payload["operation_key"] == attempts[0].operation_key
+        assert check.last_payload["fenced"] is True
+
+
+async def test_postgres_cancellation_claim_commits_before_http_and_blocks_other_drivers(postgres):
+    from app.pollers.delivery_poller import DeliveryPoller
+    from app.saga.replacement import ReplacementCoordinator
+    from app.tools.demo_replacement import FencingDemoSellers
+
+    engine, sessions, ids = postgres
+    event = make_event(ids)
+    order_id = event.payload.order_id
+    entered, release = asyncio.Event(), asyncio.Event()
+    class BlockingSeller(FencingDemoSellers):
+        async def cancel(self, *args):
+            async with sessions() as session:
+                check = (await session.scalars(select(CancellationCheck).where(
+                    CancellationCheck.order_id == order_id))).one()
+                assert check.request_count == 1 and check.next_retry_at is not None
+                attempt = await session.get(LineAttempt, check.attempt_id)
+                assert attempt.status == "CANCELLATION_PENDING"
+            entered.set()
+            await release.wait()
+            return await super().cancel(*args)
+    seller = BlockingSeller(lambda: datetime.now(timezone.utc))
+    seller.lose_first_reply = False
+    def coordinator():
+        return Coordinator(sessions, seller, ["seller-1", "seller-2"],
+            lock=lambda oid: postgres_order_lock(engine, oid), workflow_topic="workflow.events",
+            timeout_seconds=10)
+    await accept_order(event, sessions, workflow_topic="workflow.events")
+    await coordinator().run_order(order_id)
+    await DeliveryPoller(coordinator(), seller).run_order(order_id)
+    first = asyncio.create_task(ReplacementCoordinator(coordinator(), seller).run_order(order_id))
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        for driver in (coordinator(), DeliveryPoller(coordinator(), seller),
+                       ReplacementCoordinator(coordinator(), seller)):
+            with pytest.raises(OrderBusy):
+                await driver.run_order(order_id)
+        release.set()
+        assert (await first)["status"] == "RESERVED"
+        assert seller.cancel_calls == 1 and seller.reserve_calls == 2
     finally:
         release.set()
         if not first.done():

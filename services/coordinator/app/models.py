@@ -90,6 +90,25 @@ class DeliveryCheck(Base):
     )
 
 
+class CancellationCheck(Base):
+    __tablename__ = "cancellation_checks"
+    attempt_id: Mapped[str] = mapped_column(ForeignKey("line_attempts.attempt_id"), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("workflows.order_id"))
+    line_id: Mapped[str] = mapped_column(String(128))
+    cancellation_key: Mapped[str] = mapped_column(String(80), unique=True)
+    status: Mapped[str] = mapped_column(String(40), default="PENDING")
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(80))
+    status_version: Mapped[int | None] = mapped_column(Integer)
+    last_payload: Mapped[dict | None] = mapped_column(JSON)
+    __table_args__ = (
+        CheckConstraint("request_count >= 0"),
+        CheckConstraint("status_version IS NULL OR status_version >= 1"),
+        Index("ix_cancellation_checks_due", "status", "next_retry_at"),
+    )
+
+
 class ProcessedEvent(Base):
     __tablename__ = "processed_events"
     event_id: Mapped[str] = mapped_column(String(36), primary_key=True)
