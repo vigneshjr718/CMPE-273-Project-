@@ -1,0 +1,23 @@
+# EXAMPLE for D to review/merge. Not a standalone compose.yaml.
+# Paths below assume this fragment is merged into infra/docker-compose.yml.
+# Service names postgres/seller-1..5 are placeholders until D confirms them.
+services:
+  coordinator:
+    build:
+      context: ../services/coordinator
+    env_file:
+      - ../services/coordinator/.env
+    environment:
+      COORDINATOR_DATABASE_URL: ${COORDINATOR_DATABASE_URL:?set a coordinator-only DB URL}
+      COORDINATOR_SELLER_URLS: '{"seller-1":"http://seller-1:8000","seller-2":"http://seller-2:8000","seller-3":"http://seller-3:8000","seller-4":"http://seller-4:8000","seller-5":"http://seller-5:8000"}'
+    ports:
+      - "127.0.0.1:8002:8002"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+# Run coordinator Alembic migrations separately before launching the service.
+# Compose env_file does not provide interpolation values for ${...}; configure
+# D's root .env/shell accordingly. /health is liveness, /ready checks DB/schema.

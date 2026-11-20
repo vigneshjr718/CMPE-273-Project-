@@ -1,0 +1,73 @@
+"""Foundation only: schema is not evidence that recovery workers exist."""
+from datetime import datetime
+from uuid import uuid4
+
+from sqlalchemy import (
+    CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, String,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from app.schemas import utc_now
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Workflow(Base):
+    __tablename__ = "workflows"
+    order_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(40), default="PENDING")
+    state_version: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    __table_args__ = (CheckConstraint("state_version >= 0"),)
+
+
+class LineAttempt(Base):
+    __tablename__ = "line_attempts"
+    attempt_id: Mapped[str] = mapped_column(String(36), primary_key=True,
+                                           default=lambda: str(uuid4()))
+    order_id: Mapped[str] = mapped_column(ForeignKey("workflows.order_id"))
+    line_id: Mapped[str] = mapped_column(String(128))
+    seller_id: Mapped[str] = mapped_column(String(128))
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    operation_key: Mapped[str] = mapped_column(String(80), unique=True)
+    status: Mapped[str] = mapped_column(String(40), default="RESERVING")
+    reservation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    __table_args__ = (
+        UniqueConstraint("order_id", "line_id", "attempt_number"),
+        CheckConstraint("attempt_number >= 1"),
+        CheckConstraint("retry_count >= 0"),
+        Index("ix_line_attempts_due", "status", "next_retry_at"),
+    )
+
+
+class ProcessedEvent(Base):
+    __tablename__ = "processed_events"
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("workflows.order_id"))
+    processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox"
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True,
+                                         default=lambda: str(uuid4()))
+    order_id: Mapped[str] = mapped_column(ForeignKey("workflows.order_id"))
+    topic: Mapped[str] = mapped_column(String(128))
+    event_type: Mapped[str] = mapped_column(String(80))
+    state_version: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("order_id", "state_version"),
+        CheckConstraint("state_version >= 1"),
+        Index("ix_outbox_pending", "published_at", "created_at"),
+    )
