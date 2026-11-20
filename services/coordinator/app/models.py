@@ -1,4 +1,4 @@
-"""Foundation only: schema is not evidence that recovery workers exist."""
+"""Coordinator-owned state; transactions/worker logic enforce behavior."""
 from datetime import datetime
 from uuid import uuid4
 
@@ -37,6 +37,9 @@ class LineAttempt(Base):
     operation_key: Mapped[str] = mapped_column(String(80), unique=True)
     status: Mapped[str] = mapped_column(String(40), default="RESERVING")
     reservation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    estimated_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    response_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -45,6 +48,24 @@ class LineAttempt(Base):
         CheckConstraint("attempt_number >= 1"),
         CheckConstraint("retry_count >= 0"),
         Index("ix_line_attempts_due", "status", "next_retry_at"),
+    )
+
+
+class WorkflowLine(Base):
+    __tablename__ = "workflow_lines"
+    order_id: Mapped[str] = mapped_column(ForeignKey("workflows.order_id"), primary_key=True)
+    line_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    part_id: Mapped[str] = mapped_column(String(128))
+    quantity: Mapped[int] = mapped_column(Integer)
+    needed_by: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(40), default="PENDING")
+    # Logical link verified under the order lock; avoids cyclic migration FKs.
+    current_attempt_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    __table_args__ = (
+        CheckConstraint("quantity > 0"),
+        CheckConstraint("attempt_count >= 0"),
     )
 
 
