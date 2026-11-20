@@ -26,7 +26,7 @@ TRANSITIONS = {
         LineState.RESERVED, LineState.UNKNOWN, LineState.QUOTING,
     },
     LineState.RESERVED: {LineState.CANCELLATION_PENDING, LineState.DELIVERED},
-    LineState.UNKNOWN: {LineState.RECONCILING},
+    LineState.UNKNOWN: {LineState.RECONCILING, LineState.CANCELLATION_PENDING},
     LineState.RECONCILING: {
         LineState.RESERVED, LineState.CANCELLATION_PENDING,
         LineState.RECONCILIATION_REQUIRED, LineState.UNKNOWN, LineState.QUOTING,
@@ -37,7 +37,7 @@ TRANSITIONS = {
     },
     LineState.REPLACING: {LineState.QUOTING},
     LineState.RECONCILIATION_REQUIRED: {
-        LineState.RECONCILING, LineState.CANCELLATION_PENDING,
+        LineState.RECONCILING, LineState.CANCELLATION_PENDING, LineState.QUOTING,
     },
     LineState.DELIVERED: set(),
     LineState.UNFULFILLED: set(),
