@@ -144,3 +144,24 @@ line.replacement_started. Existing line.reserving adds replaces_attempt_id.
 Current-attempt snapshots add cancellation status/key/count/error/receipt and
 next retry. Prior attempts and receipts remain auditable after ownership changes.
 All event/state transitions retain the same local transaction/outbox rules.
+
+
+## Checkpoint 7: incoming Kafka transport proposal for A/D
+
+See ORDER_CONSUMER.md for the full wire/failure policy. Incoming messages use
+UTF-8 JSON OrderCreatedEvent and exact UTF-8 payload.order_id as the Kafka key.
+Headers are not authoritative. Topics/group names remain provisional; no new
+A/D source/contracts were available in inspected remote branches November20.
+
+B disables auto-commit, reads committed Kafka transactions, and explicitly commits
+only the current partition's next offset after transactional accept_order returns.
+A duplicate event/order is durably handled according to the existing handler;
+a conflicting business payload or invalid envelope stops intake without skipping
+that record or later prefetched records. No dead-letter wire contract or automatic
+offset reset is introduced. New groups require an explicit bootstrap choice.
+
+Input is accepted into PENDING/version1; acceptance is decoupled from Saga
+execution and outbox publication. Failures/rebalances can replay source records;
+DB inbox/workflow/outbox transactionality protects the acceptance effect. This
+is not a cross-system exactly-once claim. Scheduling and full process restart
+recovery remain the next checkpoint. Live A/D compatibility is still pending.
