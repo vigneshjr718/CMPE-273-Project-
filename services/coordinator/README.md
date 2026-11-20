@@ -13,9 +13,11 @@ serialize order drivers. Repeating a completed reservation flow does not reserve
 again. Bounded lookup/same-key replay reconciliation is now implemented through
 a separate manual driver (see RECONCILIATION.md). Its budget and retry schedule
 are persisted, and uncertainty remains visible when it cannot be resolved.
+The saved outbox can now be published by a separate bounded Kafka relay CLI
+(see OUTBOX.md), using the original event ID/payload and order ID as the key.
 
 **Not implemented yet:** order Kafka consumer, automatic scheduling,
-cancellation/replacement, delivery polling, outbox relay and
+cancellation/replacement, delivery polling and
 full recovery workers. The manual driver conservatively marks an interrupted
 RESERVING attempt UNKNOWN rather than creating a fresh reservation. There is
 deliberately no public endpoint that pretends to accept/process orders.
@@ -38,7 +40,7 @@ python -m pytest -q
 The default tests do not require Docker or a running seller/DB/broker. They use controlled
 HTTP fixtures and temporary **SQLite** databases for local schema/transaction
 checks. Current opt-in PostgreSQL tests are documented in RECONCILIATION.md.
-Kafka integration tests are not yet present.
+An additional opt-in PostgreSQL/Kafka replay check is documented in OUTBOX.md.
 
 To start the foundation:
 
@@ -50,8 +52,10 @@ python -m uvicorn app.main:app --port 8002 --no-access-log
 Open http://localhost:8002/health and http://localhost:8002/docs.
 Without a configured, migrated database, /ready correctly returns HTTP 503.
 /ready checks this component's database and migration revision only. Kafka and
-worker readiness must be added when workers exist. Both health responses identify
-the current implementation as a foundation.
+worker readiness must be added to the combined deployment later. The relay is a
+separate CLI/process, so /ready does not certify its health or Kafka connectivity.
+Both health responses identify the current HTTP implementation as a foundation;
+workers=not_started_in_http_process makes the separate-process boundary explicit.
 
 ## PostgreSQL migrations
 Ask C/D for the coordinator-only role/credentials and database connection. The
@@ -91,7 +95,8 @@ requirements-dev.txt. Do not commit .env, virtual environments or test DBs.
 
 ## Verification and next checkpoint
 See CHECKPOINT.md for historical foundation verification and INGESTION.md /
-RESERVATIONS.md / RECONCILIATION.md for later increments. Run alembic upgrade head after schema updates;
+RESERVATIONS.md / RECONCILIATION.md / OUTBOX.md for later increments. Run alembic upgrade head after schema updates;
 migration 0002 preserves existing accepted orders. Reconciliation adds no new
-migration. Next: implement compensation, delivery polling, Kafka transport and
+migration. The outbox relay adds aiokafka but no migration.
+Next: implement compensation, delivery polling, incoming Kafka transport and
 automatic recovery against agreed team contracts.

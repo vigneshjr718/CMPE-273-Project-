@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     consumer_group: str = "coordinator-v1"
     reconciliation_max_cycles: int = Field(default=3, ge=1, le=10)
     reconciliation_backoff_seconds: float = Field(default=1.0, gt=0, le=60)
+    outbox_batch_size: int = Field(default=50, ge=1, le=1000)
+    outbox_poll_seconds: float = Field(default=1.0, gt=0, le=60)
+    kafka_operation_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
 
     @field_validator("log_level")
     @classmethod

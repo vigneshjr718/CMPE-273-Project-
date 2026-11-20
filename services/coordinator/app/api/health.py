@@ -31,5 +31,5 @@ async def readiness(request: Request):
         "service": "coordinator", "status": "ready",
         "implementation": "foundation",
         "checks": {"database_and_migrations": "passed"},
-        "workers": "not_implemented",
+        "workers": "not_started_in_http_process",
     }
