@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     incoming_topic: str = "order.created"
     workflow_topic: str = "workflow.events"
     consumer_group: str = "coordinator-v1"
+    reconciliation_max_cycles: int = Field(default=3, ge=1, le=10)
+    reconciliation_backoff_seconds: float = Field(default=1.0, gt=0, le=60)
 
     @field_validator("log_level")
     @classmethod
