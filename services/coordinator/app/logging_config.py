@@ -13,7 +13,8 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
         }
         for key in ("request_id", "order_id", "line_id", "attempt_id", "status_code",
-                    "event_id", "state_version", "failure_type"):
+                    "event_id", "state_version", "failure_type", "topic", "partition",
+                    "offset", "outcome"):
             if hasattr(record, key):
                 data[key] = getattr(record, key)
         # Never serialize request bodies, DSNs, headers or arbitrary exception text.

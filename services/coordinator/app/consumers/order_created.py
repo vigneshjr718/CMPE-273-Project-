@@ -1,4 +1,4 @@
-"""Transactional handler. Kafka transport/offset acknowledgement is added later."""
+"""Transactional acceptance; Kafka acknowledgement is owned by the transport."""
 import asyncio
 from dataclasses import dataclass
 from typing import Literal
