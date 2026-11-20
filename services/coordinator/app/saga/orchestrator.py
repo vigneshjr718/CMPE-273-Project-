@@ -9,7 +9,7 @@ import httpx
 from sqlalchemy import select
 
 from app.clients.reservations import ReservationClient, validate_reply
-from app.models import LineAttempt, OutboxEvent, Workflow, WorkflowLine
+from app.models import DeliveryCheck, LineAttempt, OutboxEvent, Workflow, WorkflowLine
 from app.saga.keys import reservation_key
 from app.saga.selection import collect_quotes
 from app.saga.states import LineState, require_transition
@@ -23,15 +23,20 @@ def as_utc(value: datetime) -> datetime:
 
 def aggregate(lines: list[WorkflowLine]) -> str:
     states = {line.status for line in lines}
-    if any(line.reason == "DELIVERY_AFTER_DEADLINE" for line in lines) or states & {
+    if any(line.reason in {"DELIVERY_AFTER_DEADLINE", "DELIVERY_DEADLINE_PASSED_UNCONFIRMED"}
+           for line in lines) or states & {
         "UNKNOWN", "RECONCILING", "RECONCILIATION_REQUIRED", "CANCELLATION_PENDING",
     }:
         return "RECONCILIATION_REQUIRED"
-    if states == {"RESERVED"}:
+    if states == {"DELIVERED"}:
+        return "FULFILLED"
+    if states <= {"RESERVED", "DELIVERED"}:
         return "RESERVED"
     if states == {"UNFULFILLED"}:
         return "UNFULFILLED"
-    if states <= {"RESERVED", "UNFULFILLED"}:
+    if states <= {"DELIVERED", "UNFULFILLED"}:
+        return "PARTIALLY_FULFILLED"
+    if states <= {"RESERVED", "DELIVERED", "UNFULFILLED"}:
         return "PARTIALLY_RESERVED"
     return "PROCESSING"
 
@@ -271,6 +276,9 @@ class Coordinator:
             for row in lines:
                 attempt = (await session.get(LineAttempt, row.current_attempt_id)
                            if row.current_attempt_id else None)
+                delivery = (await session.get(DeliveryCheck, row.current_attempt_id)
+                            if row.current_attempt_id else None)
+                observation = delivery.last_payload if delivery and delivery.last_payload else {}
                 values.append({
                     "line_id": row.line_id, "part_id": row.part_id,
                     "quantity": row.quantity, "status": row.status,
@@ -279,9 +287,19 @@ class Coordinator:
                     "seller_id": attempt.seller_id if attempt else None,
                     "operation_key": attempt.operation_key if attempt else None,
                     "reservation_id": attempt.reservation_id if attempt else None,
+                    "estimated_delivery_at": (as_utc(attempt.estimated_delivery_at).isoformat()
+                                               if attempt and attempt.estimated_delivery_at else None),
                     "retry_count": attempt.retry_count if attempt else 0,
                     "next_retry_at": (as_utc(attempt.next_retry_at).isoformat()
                                       if attempt and attempt.next_retry_at else None),
+                    "delivery_status": observation.get("status"),
+                    "delivery_status_version": delivery.status_version if delivery else None,
+                    "delivered_at": observation.get("delivered_at"),
+                    "delivery_poll_count": delivery.poll_count if delivery else 0,
+                    "delivery_poll_failures": delivery.failure_count if delivery else 0,
+                    "delivery_poll_error": delivery.last_error if delivery else None,
+                    "next_delivery_poll_at": (as_utc(delivery.next_poll_at).isoformat()
+                                              if delivery and delivery.next_poll_at else None),
                 })
             return {
                 "order_id": order_id, "status": workflow.status,
