@@ -29,7 +29,7 @@ TRANSITIONS = {
     LineState.UNKNOWN: {LineState.RECONCILING},
     LineState.RECONCILING: {
         LineState.RESERVED, LineState.CANCELLATION_PENDING,
-        LineState.RECONCILIATION_REQUIRED,
+        LineState.RECONCILIATION_REQUIRED, LineState.UNKNOWN, LineState.QUOTING,
     },
     LineState.CANCELLATION_PENDING: {
         LineState.REPLACING, LineState.DELIVERED,

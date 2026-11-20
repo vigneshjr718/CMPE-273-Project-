@@ -8,7 +8,7 @@ from uuid import uuid4
 import httpx
 from sqlalchemy import select
 
-from app.clients.reservations import ReservationClient, ReservationReply
+from app.clients.reservations import ReservationClient, validate_reply
 from app.models import LineAttempt, OutboxEvent, Workflow, WorkflowLine
 from app.saga.keys import reservation_key
 from app.saga.selection import collect_quotes
@@ -135,6 +135,7 @@ class Coordinator:
                 if reply:
                     attempt.response_payload = reply.model_dump(mode="json")
                     attempt.reservation_id = reply.reservation_id
+                    attempt.next_retry_at = None
                     attempt.estimated_delivery_at = (
                         as_utc(reply.estimated_delivery_at)
                         if reply.estimated_delivery_at else None
@@ -222,11 +223,7 @@ class Coordinator:
                     self.client.reserve(quote.seller_id, order_id, line, key),
                     timeout=self.timeout,
                 )
-                if not isinstance(reply, ReservationReply):
-                    raise ValueError("invalid reservation reply")
-                if (reply.seller_id != quote.seller_id or reply.operation_key != key
-                    or reply.part_id != line.part_id or reply.quantity != line.quantity):
-                    raise ValueError("reservation reply identity does not match persisted attempt")
+                validate_reply(reply, quote.seller_id, line, key)
             except (TimeoutError, httpx.HTTPError, ValueError):
                 await self._set_state(
                     order_id, line.line_id, "UNKNOWN", "line.unknown",
@@ -282,6 +279,9 @@ class Coordinator:
                     "seller_id": attempt.seller_id if attempt else None,
                     "operation_key": attempt.operation_key if attempt else None,
                     "reservation_id": attempt.reservation_id if attempt else None,
+                    "retry_count": attempt.retry_count if attempt else 0,
+                    "next_retry_at": (as_utc(attempt.next_retry_at).isoformat()
+                                      if attempt and attempt.next_retry_at else None),
                 })
             return {
                 "order_id": order_id, "status": workflow.status,
