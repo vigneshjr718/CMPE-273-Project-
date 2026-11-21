@@ -1,11 +1,8 @@
-# Historical checkpoint: durable order acceptance
+# Durable order acceptance
 
-Kafka transport is now implemented separately: see ORDER_CONSUMER.md. The
-original direct-handler checkpoint and its evidence are retained below.
-
-Adds only new coordinator-owned files. No new dependencies or schema migrations
-are needed beyond checkpoint 0. This is a direct handler/CLI, **not yet a running
-Kafka consumer, reservation orchestrator or outbox publisher**.
+The direct handler/CLI accepts orders transactionally. Kafka intake uses the same
+handler; see [ORDER_CONSUMER.md](ORDER_CONSUMER.md). Migrate the current schema
+before use; scheduling is covered in [SCHEDULER.md](SCHEDULER.md).
 
 ## Local verification
 From services/coordinator with the Python 3.12 virtual environment active:
@@ -20,7 +17,7 @@ should report outcome=created; the second should report duplicate_event.
 If this sample was already accepted, both legitimately return duplicate_event.
 The data is synthetic; the 2030 example dates are illustrative.
 
-Verify committed results (on Wendy's local development container):
+Verify committed results (using the example local PostgreSQL container):
 ```bash
 docker exec partstream-coordinator-db psql -U coordinator -d coordinator_db -c "SELECT order_id,status,state_version FROM workflows WHERE order_id='demo-order-001';"
 docker exec partstream-coordinator-db psql -U coordinator -d coordinator_db -c "SELECT count(*) FROM processed_events WHERE order_id='demo-order-001';"
@@ -29,10 +26,12 @@ docker exec partstream-coordinator-db psql -U coordinator -d coordinator_db -c "
 
 Expected: one workflow at PENDING/version 1, one processed-event record, and one
 unpublished workflow.accepted outbox record. Later workflow execution changes
-these expected statuses/versions; these checks apply to this isolated checkpoint.
+these expected statuses/versions. Inspect these rows before any workflow worker
+or outbox relay processes the order.
 
 ## What is guaranteed by this handler
-- Workflow + inbox + outgoing outbox event are one local database transaction.
+- Workflow + inbox + outgoing outbox event + scheduling job are one local
+  database transaction.
 - Identical replay has no new workflow/outbox effect.
 - A new event ID for an identical order records an additional inbox ID only.
 - Reuse of an order/event ID for a different business payload is an explicit
@@ -41,7 +40,7 @@ these expected statuses/versions; these checks apply to this isolated checkpoint
 - Unique keys arbitrate concurrent inserts; a losing transaction retries from
   fresh state up to three times. Exhaustion propagates the DB error for safe
   transport retry, never acknowledgement.
-- A returned success follows the DB commit. A later consumer must acknowledge
+- A returned success follows the DB commit. The Kafka consumer acknowledges
   Kafka only after this succeeds.
 
 Idempotency compares the validated business payload; event metadata differences
@@ -58,17 +57,9 @@ One state_version per order, as proposed in integration-proposal.md.
 Outbox.payload stores the complete wire envelope, not just the inner payload.
 This local draft does not modify contracts/ or claim D has approved it.
 
-## Evidence and remaining checks
-The automated ingestion tests use real SQLite transactions with controlled
-inputs and injected failure. They do not establish PostgreSQL race/locking
-behavior. Run the two CLI invocations on real PostgreSQL and inspect the rows
-before claiming that manual PostgreSQL acceptance/replay check passed.
-Additional real concurrent PostgreSQL and Kafka checks remain upcoming.
-
-Checkpoint verification in the preparation environment: 42 tests passed,
-including the original 33 foundation tests and nine new ingestion cases.
-Wendy's previous checkpoint is pushed as f738f4c on
-feature/package-b-coordinator; 33 foundation tests and PostgreSQL migration/
-readiness were verified on her Mac. Her saved .env resolves port 55432 after
-unsetting the temporary shell override. This incremental code still needs
-the same test/CLI verification on her Mac before it is committed/pushed.
+## Verification scope
+Local ingestion tests use actual temporary SQLite transactions and injected
+failures. Opt-in PostgreSQL and Kafka tests additionally cover persistence,
+concurrent acceptance and source-record replay. See [VERIFICATION.md](VERIFICATION.md)
+for recorded results and the distinction between infrastructure and live-neighbor
+integration evidence.

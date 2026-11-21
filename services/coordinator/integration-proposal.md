@@ -75,10 +75,10 @@ without side effects. Never use this path for a timeout.
 RECONCILIATION_REQUIRED remains visible and can resume; it is not success.
 DELIVERED/UNFULFILLED are terminal for this proposed line workflow.
 
-State guards restrict allowed names; future orchestration must also verify the
+State guards restrict allowed names; orchestration also validates the durable
 evidence needed for each transition. An enum alone does not enforce a Saga.
 
-## Message transaction rules for next checkpoint
+## Message transaction rules
 - Consume order: inbox record + workflow creation in one local transaction.
 - Transition: state + next order version + outbox event in one transaction.
 - Offset acknowledgment follows durable local commit.
@@ -122,7 +122,7 @@ unfulfilled lines produces PARTIALLY_FULFILLED. DELIVERED_AFTER_DEADLINE remains
 visible as a lateness reason even when all actual deliveries are complete.
 
 
-## Checkpoint 6: terminal fencing and replacement proposal
+## Terminal fencing and replacement proposal
 
 See [REPLACEMENT.md](REPLACEMENT.md) for the complete provisional cancellation
 endpoint, payload, terminal receipt and shared source-version requirements.
@@ -146,7 +146,7 @@ next retry. Prior attempts and receipts remain auditable after ownership changes
 All event/state transitions retain the same local transaction/outbox rules.
 
 
-## Checkpoint 7: incoming Kafka transport proposal for A/D
+## Incoming Kafka transport proposal for A/D
 
 See ORDER_CONSUMER.md for the full wire/failure policy. Incoming messages use
 UTF-8 JSON OrderCreatedEvent and exact UTF-8 payload.order_id as the Kafka key.
@@ -163,11 +163,11 @@ offset reset is introduced. New groups require an explicit bootstrap choice.
 Input is accepted into PENDING/version1; acceptance is decoupled from Saga
 execution and outbox publication. Failures/rebalances can replay source records;
 DB inbox/workflow/outbox transactionality protects the acceptance effect. This
-is not a cross-system exactly-once claim. Scheduling and full process restart
-recovery remain the next checkpoint. Live A/D compatibility is still pending.
+is not a cross-system exactly-once claim. Durable scheduling and worker process restart recovery are documented in
+SCHEDULER.md; recorded controlled-demo evidence is in VERIFICATION.md. Live A/D compatibility is still pending.
 
 
-## Checkpoint 8: durable jobs and process boundaries
+## Durable jobs and process boundaries
 
 Intake now saves a workflow_jobs row in its existing transaction. This is internal
 coordinator scheduling data, not an A/D wire contract change. A separate bounded
