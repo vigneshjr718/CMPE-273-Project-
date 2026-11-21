@@ -95,6 +95,7 @@ def test_postgres_migration_sql_compiles():
     assert "CREATE TABLE outbox" in result.stdout
     assert "CREATE TABLE delivery_checks" in result.stdout
     assert "CREATE TABLE cancellation_checks" in result.stdout
+    assert "CREATE TABLE workflow_jobs" in result.stdout
 
 
 async def test_upgrade_from_reservations_preserves_saved_business_state(tmp_path):
@@ -168,5 +169,45 @@ async def test_cancellation_upgrade_preserves_checkpoint5_delivery_and_outbox(tm
             assert check.poll_count == 2 and check.next_poll_at and check.status_version == 1
             assert (await session.get(OutboxEvent, "existing-event")).payload == {"saved": "unchanged"}
             assert await session.scalar(select(func.count()).select_from(CancellationCheck)) == 0
+    finally:
+        await engine.dispose()
+
+
+async def test_scheduler_upgrade_backfills_jobs_without_changing_saved_evidence(tmp_path):
+    from datetime import datetime,timedelta,timezone
+    from app.models import CancellationCheck,LineAttempt,WorkflowJob
+    url=f"sqlite+aiosqlite:///{tmp_path / 'checkpoint7.db'}"
+    env={**os.environ,"COORDINATOR_DATABASE_URL":url}
+    subprocess.run([sys.executable,"-m","alembic","upgrade","0004_cancellation"],
+                   cwd=ROOT,env=env,check=True,capture_output=True,text=True)
+    engine=create_async_engine(url); sessions=async_sessionmaker(engine)
+    saved=datetime(2030,1,1,tzinfo=timezone.utc)
+    try:
+        async with sessions.begin() as session:
+            session.add(Workflow(order_id="pending-fence",payload={},status="RECONCILIATION_REQUIRED",
+                                 state_version=8,updated_at=saved))
+            session.add(Workflow(order_id="completed",payload={},status="FULFILLED",state_version=6))
+            await session.flush()
+            session.add(LineAttempt(attempt_id="saved-attempt",order_id="pending-fence",line_id="l1",
+                seller_id="seller-1",attempt_number=1,operation_key="original-key",status="CANCELLATION_PENDING"))
+            await session.flush()
+            session.add(CancellationCheck(attempt_id="saved-attempt",order_id="pending-fence",line_id="l1",
+                cancellation_key="stable-cancel-key",status="PENDING",request_count=1,
+                next_retry_at=saved+timedelta(seconds=4)))
+            session.add(OutboxEvent(event_id="saved-outgoing",order_id="pending-fence",topic="workflow.events",
+                event_type="line.cancelling",state_version=8,payload={"saved":"unchanged"}))
+        subprocess.run([sys.executable,"-m","alembic","upgrade","head"],cwd=ROOT,env=env,
+                       check=True,capture_output=True,text=True)
+        await check_database(engine)
+        async with sessions() as session:
+            job=await session.get(WorkflowJob,"pending-fence")
+            assert job.status=="READY" and job.run_count==0 and job.next_run_at
+            terminal=await session.get(WorkflowJob,"completed")
+            assert terminal.status=="COMPLETE" and terminal.next_run_at is None
+            assert (await session.get(Workflow,"pending-fence")).state_version==8
+            assert (await session.get(LineAttempt,"saved-attempt")).operation_key=="original-key"
+            check=await session.get(CancellationCheck,"saved-attempt")
+            assert check.request_count==1 and check.cancellation_key=="stable-cancel-key" and check.next_retry_at
+            assert (await session.get(OutboxEvent,"saved-outgoing")).payload=={"saved":"unchanged"}
     finally:
         await engine.dispose()

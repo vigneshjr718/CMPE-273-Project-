@@ -7,7 +7,7 @@ from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.models import OutboxEvent, ProcessedEvent, Workflow
+from app.models import OutboxEvent, ProcessedEvent, Workflow, WorkflowJob
 from app.schemas import OrderCreatedEvent, utc_now
 
 
@@ -69,6 +69,7 @@ async def accept_order(
                 session.add(workflow)
                 await session.flush()  # Parent exists before FK-dependent inserts.
                 session.add(ProcessedEvent(event_id=event_id, order_id=order_id))
+                session.add(WorkflowJob(order_id=order_id, next_run_at=now))
                 outgoing_id = str(uuid4())
                 session.add(OutboxEvent(
                     event_id=outgoing_id, order_id=order_id,

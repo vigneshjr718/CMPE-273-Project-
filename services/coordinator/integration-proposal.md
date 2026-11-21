@@ -165,3 +165,18 @@ execution and outbox publication. Failures/rebalances can replay source records;
 DB inbox/workflow/outbox transactionality protects the acceptance effect. This
 is not a cross-system exactly-once claim. Scheduling and full process restart
 recovery remain the next checkpoint. Live A/D compatibility is still pending.
+
+
+## Checkpoint 8: durable jobs and process boundaries
+
+Intake now saves a workflow_jobs row in its existing transaction. This is internal
+coordinator scheduling data, not an A/D wire contract change. A separate bounded
+worker resumes saved Saga/delivery work; Kafka intake, workflow worker, HTTP and
+outbox relay retain explicit process boundaries. See SCHEDULER.md.
+
+Known late reservations may automatically enter the existing provisional terminal
+fencing protocol. Unknown reservations reconcile with the original key first and
+park visibly on budget exhaustion; manual cancellation of an unknown operation
+remains an explicit decision. No absent neighbor guarantee becomes approved by
+adding scheduling. Controlled subprocess/HTTP fixtures do not prove C's live
+fencing or persistence. Physical dispatch/cancellation semantics still need review.

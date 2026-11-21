@@ -26,6 +26,22 @@ class Workflow(Base):
     __table_args__ = (CheckConstraint("state_version >= 0"),)
 
 
+class WorkflowJob(Base):
+    __tablename__ = "workflow_jobs"
+    order_id: Mapped[str] = mapped_column(ForeignKey("workflows.order_id"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(24), default="READY")
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=utc_now)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    run_count: Mapped[int] = mapped_column(Integer, default=0)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(80))
+    __table_args__ = (
+        CheckConstraint("run_count >= 0"), CheckConstraint("failure_count >= 0"),
+        Index("ix_workflow_jobs_due", "next_run_at", "order_id"),
+    )
+
+
 class LineAttempt(Base):
     __tablename__ = "line_attempts"
     attempt_id: Mapped[str] = mapped_column(String(36), primary_key=True,

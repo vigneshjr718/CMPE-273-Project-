@@ -2,13 +2,14 @@
 
 Base: `18256269b1cf3aed58d9166a0a4f9b7d41f71c80` (verified checkpoint 6, PR #8).
 All changes are under services/coordinator/. No dependency or migration change;
-current schema remains **0004_cancellation**. Existing .env, data, saved operation
+checkpoint7 required schema was **0004_cancellation**; checkpoint8 requires0005. Existing .env, data, saved operation
 keys, earlier demos and frozen PR branches are preserved.
 
 A/D contracts are still absent from the inspected remote branches (November 20,
 2026). This is a provisional transport around the existing transactional intake,
 not proof of live A/D compatibility. It accepts workflows into PENDING/version1;
-reservation/reconciliation/delivery scheduling remains checkpoint 8.
+reservation/reconciliation/delivery scheduling is now implemented separately
+in checkpoint8; see SCHEDULER.md.
 
 ## Mac verification
 
@@ -23,7 +24,8 @@ COORDINATOR_POSTGRES_TESTS=1 COORDINATOR_KAFKA_TESTS=1 python -m pytest -q
 python -m app.tools.demo_order_consumer
 ```
 
-Keep existing PostgreSQL/Kafka containers running and schema0004 applied.
+Keep existing PostgreSQL/Kafka containers running and current migrations applied
+(checkpoint8 requires schema0005; run alembic upgrade head after that increment).
 The real demo creates a fresh synthetic two-partition topic, consumer group and
 orders. It does not read/reset shared topics/groups or contact any seller.
 Expected sequence (not evidence until run):

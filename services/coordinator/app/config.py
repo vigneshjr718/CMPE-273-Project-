@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     incoming_max_event_bytes: int = Field(default=1048576, ge=1, le=1048576)
     incoming_database_timeout_seconds: float = Field(default=10, gt=0, le=60)
 
+    scheduler_batch_size: int = Field(default=20, ge=1, le=100)
+    scheduler_concurrency: int = Field(default=3, ge=1, le=10)
+    scheduler_poll_seconds: float = Field(default=1, gt=0, le=60)
+    scheduler_order_timeout_seconds: float = Field(default=30, gt=0, le=600)
+    scheduler_retry_seconds: float = Field(default=2, gt=0, le=60)
+    scheduler_max_failures: int = Field(default=5, ge=1, le=20)
+
     @field_validator("log_level")
     @classmethod
     def valid_level(cls, value: str) -> str:

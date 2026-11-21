@@ -12,7 +12,7 @@ from app.clients.reservations import ReservationReply
 from app.config import Settings
 from app.consumers.order_created import accept_order
 from app.db import check_database, make_engine, make_sessions
-from app.models import CancellationCheck, DeliveryCheck, LineAttempt, OutboxEvent, ProcessedEvent, Workflow, WorkflowLine
+from app.models import CancellationCheck, DeliveryCheck, LineAttempt, OutboxEvent, ProcessedEvent, Workflow, WorkflowJob, WorkflowLine
 from app.saga.locking import OrderBusy, postgres_order_lock
 from app.saga.orchestrator import Coordinator
 from app.schemas import OrderCreatedEvent, Quote
@@ -35,7 +35,7 @@ async def postgres():
             if ids:
                 async with engine.begin() as connection:
                     # Exact generated IDs only, not a database/table-wide reset.
-                    for model in (CancellationCheck, DeliveryCheck, OutboxEvent, ProcessedEvent, LineAttempt, WorkflowLine, Workflow):
+                    for model in (WorkflowJob, CancellationCheck, DeliveryCheck, OutboxEvent, ProcessedEvent, LineAttempt, WorkflowLine, Workflow):
                         await connection.execute(delete(model).where(model.order_id.in_(ids)))
         finally:
             await engine.dispose()
@@ -418,3 +418,53 @@ async def test_real_postgres_kafka_intake_replay_offsets_and_poison_stop(postgre
     assert result["fresh_consumer_processed"] == 0
     assert result["poison_record_stopped_at_offset"] == 3
     assert result["later_valid_order_was_not_accepted"] is True
+
+
+async def test_postgres_scheduler_claim_is_committed_and_excludes_peer_drivers(postgres):
+    from app.tools.run_workflows import make_scheduler
+    from test_workflow_scheduler import Sellers
+
+    engine,sessions,ids=postgres
+    event=make_event(ids); order_id=event.payload.order_id
+    await accept_order(event,sessions,workflow_topic="workflow.events")
+    entered,release=asyncio.Event(),asyncio.Event()
+    seller=Sellers(lambda: datetime.now(timezone.utc))
+    original=seller.reserve
+    async def blocked(*args):
+        async with sessions() as session:
+            job=await session.get(WorkflowJob,order_id)
+            assert job.status=="RUNNING" and job.run_count==1 and job.next_run_at
+        result=await original(*args)
+        entered.set()
+        await release.wait()
+        return result
+    seller.reserve=blocked
+    def coordinator():
+        return Coordinator(sessions,seller,["seller-1","seller-2"],
+            lock=lambda oid:postgres_order_lock(engine,oid),workflow_topic="workflow.events",timeout_seconds=10)
+    def worker():
+        return make_scheduler(Settings(_env_file=None),coordinator(),seller,seller)
+    first=asyncio.create_task(worker().run_once(order_id=order_id))
+    try:
+        await asyncio.wait_for(entered.wait(),10)
+        assert await worker().run_order(order_id)=="busy"
+        with pytest.raises(OrderBusy):
+            await coordinator().run_order(order_id)
+        release.set()
+        assert (await first)["complete"]==1
+        assert len(seller.reserve_calls)==1
+    finally:
+        release.set()
+        if not first.done():
+            first.cancel()
+        await asyncio.gather(first,return_exceptions=True)
+
+
+async def test_postgres_owned_process_restart_recovers_reservation_and_cancellation(postgres):
+    from app.tools.demo_restart import run_demo
+    result=await run_demo(Settings(),cleanup=True)
+    assert result["restart_mode"]=="owned_worker_os_process_kill_and_fresh_start"
+    assert [case["attempt_count"] for case in result["cases"]]==[1,2]
+    assert all(case["final_status"]=="FULFILLED" and case["original_key_preserved"] for case in result["cases"])
+    assert result["reservation_http_calls"]==3 and result["logical_reservations"]==3
+    assert result["cancellation_http_calls"]==2 and result["terminal_fences"]==1

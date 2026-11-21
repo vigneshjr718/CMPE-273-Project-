@@ -14,7 +14,7 @@ from app.config import Settings
 from app.consumers.kafka_orders import InvalidOrderRecord, kafka_order_source
 from app.db import check_database, make_engine, make_sessions
 from app.models import (
-    CancellationCheck, DeliveryCheck, LineAttempt, OutboxEvent, ProcessedEvent, Workflow, WorkflowLine,
+    CancellationCheck, DeliveryCheck, LineAttempt, OutboxEvent, ProcessedEvent, Workflow, WorkflowJob, WorkflowLine,
 )
 from app.outbox.kafka import kafka_publisher
 from app.schemas import OrderCreatedEvent, utc_now
@@ -146,7 +146,7 @@ async def run_demo(settings, *, cleanup=False):
         try:
             if cleanup:
                 async with engine.begin() as connection:
-                    for model in (CancellationCheck, DeliveryCheck, OutboxEvent, ProcessedEvent,
+                    for model in (WorkflowJob, CancellationCheck, DeliveryCheck, OutboxEvent, ProcessedEvent,
                                   LineAttempt, WorkflowLine, Workflow):
                         await connection.execute(delete(model).where(model.order_id.in_(ids)))
                 if created:
