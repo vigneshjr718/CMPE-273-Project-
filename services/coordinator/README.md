@@ -1,7 +1,7 @@
 # Coordinator - Package B
 
-This is Wendy's **component-local implementation**, following Alicia's structure.
-No files belonging to A/C/D or root infrastructure are changed.
+Package B coordinates order fulfillment through durable workflows, seller adapters,
+Kafka intake and outbox publication. It owns its service code and database state.
 
 ## Current status
 Implemented: the component foundation below, transactional order acceptance
@@ -29,7 +29,8 @@ It creates PENDING workflows without invoking sellers.
 Durable workflow scheduling is now implemented in a separate worker process
 (see SCHEDULER.md). Intake creates a durable job atomically; due jobs resume
 reservation/reconciliation/delivery/cancellation work under the same order lock.
-A two-scenario OS-process restart demo is supplied for Mac verification.
+A two-scenario OS-process restart demo has been verified against real PostgreSQL
+with controlled HTTP sellers; see [VERIFICATION.md](VERIFICATION.md).
 
 **Remaining:** live A/C/D integration, broader deployment/failure verification,
 benchmarks and final diagrams/report. The manual driver conservatively marks an interrupted
@@ -90,8 +91,8 @@ test database. Do not run it against data you need.
 The Docker build context is **services/coordinator**, not the repository root:
 
 ```bash
-docker build -t partstream-coordinator:checkpoint0 .
-docker run --rm --env-file .env -p 127.0.0.1:8002:8002 partstream-coordinator:checkpoint0
+docker build -t partstream-coordinator:local .
+docker run --rm --env-file .env -p 127.0.0.1:8002:8002 partstream-coordinator:local
 ```
 
 Inside a container, localhost refers to that container. Set database/seller/
@@ -107,11 +108,20 @@ requirements-dev.txt adds test dependencies; they are not installed by Docker.
 The constraints file includes test-package pins but they are installed only by
 requirements-dev.txt. Do not commit .env, virtual environments or test DBs.
 
-## Verification and next checkpoint
-See CHECKPOINT.md for historical foundation verification and INGESTION.md /
-RESERVATIONS.md / RECONCILIATION.md / OUTBOX.md for later increments. Run alembic upgrade head after schema updates;
-migration 0005 adds/backfills workflow_jobs while preserving accepted orders,
-attempts, cancellation/delivery evidence and saved outbox events.
-The outbox relay adds aiokafka; delivery polling adds no dependency.
-Next: verify the process restart demo, integrate live neighbors, then finish
-benchmarks/report deliverables against agreed team contracts.
+## Guides and verification
+- [INGESTION.md](INGESTION.md): transactional order acceptance and replay.
+- [RESERVATIONS.md](RESERVATIONS.md): persisted attempts and normal allocation.
+- [RECONCILIATION.md](RECONCILIATION.md): uncertain reservation recovery.
+- [OUTBOX.md](OUTBOX.md): Kafka workflow event publication.
+- [DELIVERY.md](DELIVERY.md): delivery observations and late detection.
+- [REPLACEMENT.md](REPLACEMENT.md): terminal fencing and safe replacement.
+- [ORDER_CONSUMER.md](ORDER_CONSUMER.md): Kafka intake and offset handling.
+- [SCHEDULER.md](SCHEDULER.md): durable scheduling and worker restart recovery.
+- [VERIFICATION.md](VERIFICATION.md): recorded results, reproduction and limits.
+
+Run `alembic upgrade head` after schema updates. Migration `0005_workflow_jobs`
+adds/backfills workflow jobs while preserving accepted orders, attempts,
+cancellation/delivery evidence and saved outbox events.
+
+Live A/C/D integration, broader deployment verification, benchmarks and final
+diagrams/report remain pending against agreed team contracts.

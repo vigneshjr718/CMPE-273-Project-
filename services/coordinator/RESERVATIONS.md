@@ -1,11 +1,8 @@
-# Checkpoint 2: persisted normal reservation workflow
+# Persisted reservation workflow
 
-## Transfer and migration
-This increment is based on pushed commit **17359aa**. It modifies only
-services/coordinator/ and never includes .env, virtual environments or databases.
-Confirm your working tree is clean before applying it; this archive intentionally
-replaces app/models.py, app/db.py and README.md with the updated B-owned versions.
-It adds a new migration instead of editing the already-applied 0001 migration.
+## Setup and migration
+Migration `0002_reservation_flow` introduced persisted line/attempt state. Apply
+all current migrations before using any driver. Existing accepted input is retained.
 
 From services/coordinator with .venv active and local PostgreSQL running:
 ```bash
@@ -28,12 +25,8 @@ Without --demo the HTTP adapter calls your configured seller URLs using the
 provisional contract below; coordinate with C before relying on that integration.
 
 ## Test evidence and boundaries
-Preparation environment: 58 passed, 3 skipped. The three skips are opt-in real
-PostgreSQL tests; Docker/PostgreSQL are not available in that environment.
-With the explicit COORDINATOR_POSTGRES_TESTS=1 flag, use your saved local .env
-and migrated PostgreSQL; expect 61 tests if all checks pass on your Mac.
-The real tests create uniquely named synthetic test orders, and clean up ONLY
-those generated IDs in coordinator-owned tables. They do not remove demo-order-001.
+See [VERIFICATION.md](VERIFICATION.md) for current recorded results. Opt-in
+PostgreSQL tests use unique synthetic orders and delete only their generated IDs.
 
 Coverage includes persisted-before-send evidence, outbox/state atomic rollback,
 safe repeated execution, known rejection failover, lost/invalid replies, crash
@@ -55,13 +48,13 @@ docker exec partstream-coordinator-db psql -U coordinator -d coordinator_db -c "
 
 Initially expect five unpublished events:
 1 workflow.accepted; 2 workflow.started; 3 line.quoting; 4 line.reserving;
-5 line.reserved. The Kafka relay is not implemented yet, so published_at is NULL.
+5 line.reserved. Before running the outbox relay, published_at is NULL; see OUTBOX.md.
 
 ## New persistence
 Migration 0002_reservation_flow adds workflow_lines and optional reservation
 evidence fields to line_attempts. Existing orders/inbox/outbox rows are preserved.
 Accepted Workflow.payload stays immutable. Per-line progress is separate.
-Readiness now requires revision 0002_reservation_flow.
+Current readiness requires the migration head, including 0005_workflow_jobs.
 
 All events use an increasing version **per order**. Workflow row locks serialize
 version allocation. A failed state/event transaction rolls back both. Requests
@@ -85,12 +78,11 @@ Response fields: seller_id, operation_key, part_id, quantity, status.
   contract in app/clients/reservations.py, without rewriting the workflow.
 
 Never infer safe failure from a timeout. UNKNOWN stops further reservation
-attempts for that line. A later reconciliation increment will query/retry the
-same key, and compensation must precede conflicting replacements.
+attempts for that line. The reconciler can query/retry the same key (RECONCILIATION.md); terminal
+fencing must precede a conflicting replacement (REPLACEMENT.md).
 A restarted manual driver encountering saved RESERVING marks it UNKNOWN and
-does not resend/replace yet. This is conservative restart handling, not the
-finished recovery worker.
-No retry/cancel/delivery-poll loop exists in this increment.
+does not immediately resend/replace. The separate durable worker coordinates
+reconciliation, polling and cancellation; see SCHEDULER.md.
 
 ## Provisional customer/event statuses -- D review required
 All line reservations confirmed -> order RESERVED, not delivered/fulfilled.
@@ -106,8 +98,7 @@ reason and current attempt/seller/reservation evidence where available. Envelope
 matches the prior proposed workflow.accepted envelope. Full event/topic/status
 contracts remain unapproved drafts; no shared contracts/ files were edited.
 
-## Still upcoming
-- Actual seller lookup/retry reconciliation and cancellation/fencing.
-- Safe replacement and delivery polling.
-- Kafka consumer, outbox relay and automatic DB-backed scheduling/recovery.
-- Real A/C/D integration, cloud deployment and final performance/demo evidence.
+## Related operations
+Use RECONCILIATION.md for unknown outcomes, REPLACEMENT.md for terminal fencing,
+DELIVERY.md for delivery observations, and SCHEDULER.md for automatic resumption.
+Live A/C/D integration and deployment/performance evidence remain pending.
