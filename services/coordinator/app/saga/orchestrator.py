@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from app.clients.cancellation import require_cancelled
 from app.clients.reservations import ReservationClient, validate_reply
-from app.models import CancellationCheck, DeliveryCheck, LineAttempt, OutboxEvent, Workflow, WorkflowLine
+from app.models import CancellationCheck, DeliveryCheck, LineAttempt, OutboxEvent, Workflow, WorkflowJob, WorkflowLine
 from app.saga.keys import reservation_key
 from app.saga.selection import collect_quotes
 from app.saga.states import LineState, require_transition
@@ -73,6 +73,10 @@ class Coordinator:
         emitted_at = self.clock()
         workflow.state_version += 1
         workflow.updated_at = emitted_at
+        # Manual transitions wake parked jobs; an active driver owns its schedule.
+        job = await session.get(WorkflowJob, workflow.order_id)
+        if job is not None and job.status != "RUNNING":
+            job.status, job.next_run_at = "READY", emitted_at
         event_id = str(uuid4())
         session.add(OutboxEvent(
             event_id=event_id, order_id=workflow.order_id, topic=self.topic,
