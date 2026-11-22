@@ -377,3 +377,44 @@ async def test_postgres_cancellation_claim_commits_before_http_and_blocks_other_
         if not first.done():
             first.cancel()
         await asyncio.gather(first, return_exceptions=True)
+
+
+async def test_postgres_kafka_intake_commit_failure_replays_one_durable_acceptance(postgres):
+    from app.consumers.kafka_orders import KafkaOrderIntake, OrderAssignment
+    from app.tools.demo_order_consumer import FailBeforeOffsetCommit, SimulatedOffsetFailure
+    from test_kafka_orders import Broker, P0, record
+
+    _, sessions, ids = postgres
+    event = make_event(ids)
+    async def intake(broker):
+        ownership = OrderAssignment()
+        await ownership.on_partitions_assigned([P0])
+        return KafkaOrderIntake(broker, ownership, sessions,
+            incoming_topic="order.created", workflow_topic="workflow.events")
+    broker = Broker([{P0: [record(event)]}])
+    with pytest.raises(SimulatedOffsetFailure):
+        await (await intake(FailBeforeOffsetCommit(broker))).run_once()
+    async with sessions() as session:
+        row = await session.get(Workflow, event.payload.order_id)
+        assert (row.status, row.state_version) == ("PENDING", 1)
+    replay = Broker([{P0: [record(event)]}])
+    result = await (await intake(replay)).run_once()
+    assert result.duplicate_event == 1 and replay.commits == [{P0: 1}]
+    async with sessions() as session:
+        for model in (Workflow, ProcessedEvent, OutboxEvent):
+            assert await session.scalar(select(func.count()).select_from(model).where(
+                model.order_id == event.payload.order_id)) == 1
+
+
+async def test_real_postgres_kafka_intake_replay_offsets_and_poison_stop(postgres):
+    if os.getenv("COORDINATOR_KAFKA_TESTS") != "1":
+        pytest.skip("set COORDINATOR_KAFKA_TESTS=1 for real Kafka intake/offset checks")
+    from app.tools.demo_order_consumer import run_demo
+    result = await run_demo(Settings(), cleanup=True)
+    assert result["offset_after_simulated_commit_failure"] is None
+    assert result["recovered_intake"] == dict(processed=4, created=1, duplicate_event=2, duplicate_order=1)
+    assert result["committed_offsets"] == {"0": 3, "1": 1}
+    assert (result["workflow_count"], result["inbox_count"], result["outbox_count"]) == (2, 3, 2)
+    assert result["fresh_consumer_processed"] == 0
+    assert result["poison_record_stopped_at_offset"] == 3
+    assert result["later_valid_order_was_not_accepted"] is True

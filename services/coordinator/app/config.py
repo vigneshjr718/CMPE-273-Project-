@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     cancellation_max_cycles: int = Field(default=3, ge=1, le=10)
     cancellation_backoff_seconds: float = Field(default=1.0, gt=0, le=60)
 
+    incoming_batch_size: int = Field(default=10, ge=1, le=100)
+    incoming_poll_ms: int = Field(default=1000, ge=1, le=10000)
+    incoming_max_event_bytes: int = Field(default=1048576, ge=1, le=1048576)
+    incoming_database_timeout_seconds: float = Field(default=10, gt=0, le=60)
+
     @field_validator("log_level")
     @classmethod
     def valid_level(cls, value: str) -> str:

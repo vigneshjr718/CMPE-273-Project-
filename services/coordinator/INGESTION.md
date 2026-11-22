@@ -1,4 +1,7 @@
-# Incremental checkpoint: durable order acceptance
+# Historical checkpoint: durable order acceptance
+
+Kafka transport is now implemented separately: see ORDER_CONSUMER.md. The
+original direct-handler checkpoint and its evidence are retained below.
 
 Adds only new coordinator-owned files. No new dependencies or schema migrations
 are needed beyond checkpoint 0. This is a direct handler/CLI, **not yet a running

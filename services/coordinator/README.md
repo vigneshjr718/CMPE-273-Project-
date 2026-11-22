@@ -22,8 +22,11 @@ complete a line. Confirmed cancellation/fencing and safe replacement are now
 available through a separate manual CLI (see REPLACEMENT.md). Unknown cancellation
 stays visibly pending; replacement requires a persisted terminal fence receipt.
 
-**Not implemented yet:** order Kafka consumer, automatic scheduling,
-full recovery workers. The manual driver conservatively marks an interrupted
+Incoming Kafka order intake is available through a separate bounded/watch CLI
+(see ORDER_CONSUMER.md), with explicit offset commits after durable acceptance.
+It creates PENDING workflows without invoking sellers.
+
+**Not implemented yet:** automatic scheduling and full recovery workers. The manual driver conservatively marks an interrupted
 RESERVING attempt UNKNOWN rather than creating a fresh reservation. There is
 deliberately no public endpoint that pretends to accept/process orders.
 
@@ -104,5 +107,5 @@ RESERVATIONS.md / RECONCILIATION.md / OUTBOX.md for later increments. Run alembi
 migration 0004 adds cancellation_checks while preserving accepted orders,
 attempts, delivery observations and saved outbox events.
 The outbox relay adds aiokafka; delivery polling adds no dependency.
-Next: implement incoming Kafka transport and
-automatic recovery against agreed team contracts.
+Next: automatic scheduling/full process restart recovery, then live integration
+and remaining benchmarks/report deliverables against agreed team contracts.
