@@ -11,3 +11,7 @@ def reservation_key(order_id: str, line_id: str, seller_id: str, attempt_number:
         separators=(",", ":"), ensure_ascii=True,
     ).encode()
     return "reserve-" + hashlib.sha256(raw).hexdigest()
+
+
+def cancellation_key(attempt_id: str) -> str:
+    return "cancel-" + hashlib.sha256(attempt_id.encode()).hexdigest()
