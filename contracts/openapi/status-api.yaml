@@ -1,0 +1,579 @@
+openapi: 3.1.0
+info:
+  title: PartStream Status API
+  version: 0.1.0-draft
+  description: |
+    Read-only view of order progress, served by the **tracker** (owner: D).
+    Consumer: A's frontend (`status.html`, via the public proxy).
+
+    **Status: DRAFT v0.1.** Needs review by A (UI consumer) and B (source of workflow states).
+
+    ## Where the data comes from
+    The tracker builds this view only from Kafka events (see `contracts/events/topics.md`):
+    - `order.created` (from A): the order exists, plus its lines, part IDs, quantities and needed-by dates.
+    - `workflow.events` (from B): all workflow, line, attempt, seller and delivery progress.
+
+    The tracker never reads another service's database. The view is **eventually consistent**:
+    it can lag behind A and B by however long event delivery takes.
+
+    ## Not found vs. not yet processed
+    The tracker only knows orders it has already received events for, so it **cannot** prove
+    that an order does not exist. That is why there is no "order lost" answer:
+    - **400 `INVALID_ORDER_ID`**: the ID is malformed. This is definite, and retrying will not help.
+    - **404 `ORDER_NOT_YET_VISIBLE`**: the tracker has no events for this ID *yet*. The response
+      includes `retry_after_seconds`. If the UI knows the order was accepted (it just got the
+      `order_id` from POST /orders, or A's `GET /orders/{order_id}` returns 200), it should show
+      **"processing"**. Only if A's order API also returns 404 is the ID genuinely unknown.
+    - **200**: the tracker has seen at least one event. `order_created_seen` and `state_version`
+      say how much it has seen so far.
+
+    ## Statuses
+    TODO(B): `contracts/status-values.md` has not been published. The enums below copy B's current
+    code (`saga/states.py` and `aggregate()` in `saga/orchestrator.py` on the unmerged coordinator
+    branches) and must be re-checked once B publishes it.
+    **Clients must treat any status they don't recognize as "in progress", not as an error.**
+
+    ## Security boundary
+    This API is public, through the proxy. It deliberately leaves out internal fields found in
+    B's events: operation keys, cancellation keys, seller reservation IDs, and raw error text.
+  license:
+    name: Course project (synthetic data only)
+    identifier: MIT
+
+servers:
+  - url: /api
+    description: Public, through A's proxy. ASSUMES the proxy strips the `/api` prefix (open question for A).
+  - url: http://localhost:8004
+    description: Tracker directly (local dev override only; not exposed in the cloud).
+
+tags:
+  - name: status
+  - name: ops
+
+paths:
+  /status/orders/{order_id}:
+    get:
+      tags: [status]
+      operationId: getOrderStatus
+      summary: Current status of one order, with per-line progress.
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          description: The `order_id` returned by A's `POST /orders`.
+          schema:
+            $ref: '#/components/schemas/OrderId'
+      responses:
+        '200':
+          description: The tracker has seen at least one event for this order.
+          headers:
+            Cache-Control:
+              description: Always `no-store`. Status changes often.
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderStatus'
+              examples:
+                just_accepted:
+                  $ref: '#/components/examples/JustAccepted'
+                in_progress:
+                  $ref: '#/components/examples/InProgress'
+                fulfilled:
+                  $ref: '#/components/examples/Fulfilled'
+                replaced:
+                  $ref: '#/components/examples/Replaced'
+                unfulfilled:
+                  $ref: '#/components/examples/Unfulfilled'
+                reconciliation_required:
+                  $ref: '#/components/examples/ReconciliationRequired'
+        '400':
+          description: Malformed order ID. This is definite and retrying won't help.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: INVALID_ORDER_ID
+                message: order_id must be 1-128 characters of A-Z, a-z, 0-9, '-' or '_'.
+        '404':
+          description: |
+            The tracker has not received any event for this ID **yet**. This is NOT proof that the
+            order does not exist. See "Not found vs. not yet processed" above.
+          headers:
+            Retry-After:
+              description: Seconds the client should wait before polling again.
+              schema: { type: integer, minimum: 1 }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: ORDER_NOT_YET_VISIBLE
+                message: No status events have been processed for this order yet. If it was just submitted, it is still being processed.
+                retry_after_seconds: 2
+        '503':
+          description: The tracker's database is unavailable. Try again later. This says nothing about the order itself.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: STATUS_UNAVAILABLE
+                message: Status store temporarily unavailable.
+                retry_after_seconds: 5
+
+  /health:
+    get:
+      tags: [ops]
+      operationId: health
+      summary: Liveness check (process is up). Not routed publicly.
+      responses:
+        '200':
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+
+  /ready:
+    get:
+      tags: [ops]
+      operationId: ready
+      summary: Readiness check (DB plus migrations, and the Kafka consumer is running). Not routed publicly.
+      responses:
+        '200':
+          description: Ready.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+        '503':
+          description: Not ready. `checks` says which dependency failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Readiness' }
+
+components:
+  schemas:
+    OrderId:
+      type: string
+      pattern: '^[A-Za-z0-9_-]{1,128}$'
+      description: TODO(A) confirm the ID format A assigns (B's samples use `demo-order-001`; A may use UUIDs).
+      examples: [ord-7f3c9a]
+
+    OrderStatusValue:
+      type: string
+      description: |
+        Order-level status. TODO(B): confirm with contracts/status-values.md.
+        - `ACCEPTED`: **set by the tracker, not B.** A accepted the order (`order.created` seen);
+          the coordinator has not reported yet.
+        - `PENDING`: the coordinator received the order (`workflow.accepted`).
+        - `PROCESSING`: lines are being quoted, reserved or replaced.
+        - `RESERVED`: every line is reserved or delivered.
+        - `PARTIALLY_RESERVED`: every line is reserved, delivered or unfulfilled, with at least one unfulfilled.
+        - `FULFILLED`: every line delivered. Final.
+        - `PARTIALLY_FULFILLED`: every line delivered or unfulfilled, at least one of each. Final.
+        - `UNFULFILLED`: no line could be fulfilled. Final.
+        - `RECONCILIATION_REQUIRED`: at least one line has an uncertain outcome (lost reply, unconfirmed
+          cancellation, or delivery past the deadline). This is not success; staff follow-up may be needed.
+      enum: [ACCEPTED, PENDING, PROCESSING, RESERVED, PARTIALLY_RESERVED, FULFILLED, PARTIALLY_FULFILLED, UNFULFILLED, RECONCILIATION_REQUIRED]
+
+    LineStatusValue:
+      type: string
+      description: |
+        Line state. TODO(B): confirm with contracts/status-values.md (copied from B's `LineState` enum).
+        `ACCEPTED` is set by the tracker only, before B has reported on the line.
+        Final: `DELIVERED`, `UNFULFILLED`.
+        Uncertain (the UI should show "checking with seller", never "failed"): `UNKNOWN`, `RECONCILING`,
+        `CANCELLATION_PENDING`, `RECONCILIATION_REQUIRED`.
+      enum: [ACCEPTED, PENDING, QUOTING, RESERVING, RESERVED, UNKNOWN, RECONCILING, CANCELLATION_PENDING, REPLACING, DELIVERED, UNFULFILLED, RECONCILIATION_REQUIRED]
+
+    AttemptOutcome:
+      type: string
+      description: |
+        Tracker-derived summary of one reservation attempt, based on B's events.
+        - `IN_PROGRESS`: `line.reserving` seen, no result yet.
+        - `RESERVED`: `line.reserved`.
+        - `REJECTED`: `line.reservation_rejected` (seller said no, with no side effect).
+        - `UNCERTAIN`: `line.unknown` or reconciliation is still in progress.
+        - `CANCELLED`: `line.cancelled` (confirmed cancellation, for example before a replacement).
+        - `DELIVERED`: `line.delivered`.
+      enum: [IN_PROGRESS, RESERVED, REJECTED, UNCERTAIN, CANCELLED, DELIVERED]
+
+    Flags:
+      type: object
+      description: Booleans the UI can rely on without interpreting status names.
+      required: [pending, reconciliation_required, replaced, terminal]
+      properties:
+        pending:
+          type: boolean
+          description: Work is still in progress or uncertain (the UI should keep polling).
+        reconciliation_required:
+          type: boolean
+          description: At least one outcome is uncertain and is being, or must be, reconciled.
+        replaced:
+          type: boolean
+          description: At least one seller reservation was cancelled and the part re-sourced.
+        terminal:
+          type: boolean
+          description: No further changes are expected (every line is DELIVERED or UNFULFILLED).
+
+    SelectedSeller:
+      type: object
+      description: The seller of the line's **current** attempt, or null before any seller is chosen.
+      required: [seller_id, attempt_id]
+      properties:
+        seller_id: { type: string, examples: [seller-2] }
+        attempt_id: { type: string }
+        estimated_delivery_at: { type: [string, 'null'], format: date-time }
+        delivery_status:
+          type: [string, 'null']
+          description: Last delivery status B reported from the seller (e.g. PENDING, IN_TRANSIT, DELIVERED). TODO(B/C) confirm values.
+        delivered_at: { type: [string, 'null'], format: date-time }
+
+    Attempt:
+      type: object
+      required: [attempt_id, seller_id, outcome, updated_at]
+      properties:
+        attempt_id: { type: string }
+        seller_id:
+          type: [string, 'null']
+          description: Null only if no event for this attempt named its seller.
+        outcome: { $ref: '#/components/schemas/AttemptOutcome' }
+        reason: { type: [string, 'null'] }
+        started_at: { type: [string, 'null'], format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    LineStatus:
+      type: object
+      required: [line_id, part_id, quantity, needed_by, status, reason, flags, selected_seller, attempt_count, attempts, last_updated]
+      properties:
+        line_id: { type: string }
+        part_id: { type: [string, 'null'] }
+        quantity: { type: [integer, 'null'], minimum: 1 }
+        needed_by:
+          type: [string, 'null']
+          format: date-time
+          description: |
+            Null only while neither A's order.created nor B's workflow.accepted has been
+            processed for this line (the same applies to part_id and quantity).
+        status: { $ref: '#/components/schemas/LineStatusValue' }
+        reason:
+          type: [string, 'null']
+          description: |
+            Machine-readable reason from B, or null. Known values (TODO(B): finalize): DELIVERY_AFTER_DEADLINE,
+            DELIVERY_DEADLINE_PASSED_UNCONFIRMED, RETRY_BUDGET_EXHAUSTED, AWAITING_TERMINAL_FENCE,
+            CHECKING_ORIGINAL_RESERVATION, DELIVERY_LOOKUP_UNAVAILABLE, NO_ELIGIBLE_SELLER.
+            The UI should show unknown reasons generically.
+        flags: { $ref: '#/components/schemas/Flags' }
+        selected_seller:
+          oneOf:
+            - $ref: '#/components/schemas/SelectedSeller'
+            - type: 'null'
+        attempt_count:
+          type: integer
+          minimum: 0
+          description: Number of reservation attempts so far, across all sellers.
+        attempts:
+          type: array
+          description: Attempt history summary, oldest first.
+          items: { $ref: '#/components/schemas/Attempt' }
+        last_updated: { type: string, format: date-time }
+
+    OrderStatus:
+      type: object
+      required: [order_id, status, flags, order_created_seen, state_version, created_at, last_updated, lines]
+      properties:
+        order_id: { $ref: '#/components/schemas/OrderId' }
+        status: { $ref: '#/components/schemas/OrderStatusValue' }
+        flags: { $ref: '#/components/schemas/Flags' }
+        order_created_seen:
+          type: boolean
+          description: |
+            False if the tracker has B's events but not yet A's `order.created` (the two topics are
+            not ordered relative to each other). Line details then come from B's `workflow.accepted`.
+        state_version:
+          type: integer
+          minimum: 0
+          description: |
+            The highest per-order `state_version` from B the tracker has applied. 0 means only A's
+            creation has been seen. The UI may use it to ignore an older response that arrives after
+            a newer one.
+        created_at:
+          type: [string, 'null']
+          format: date-time
+          description: When A accepted the order (`occurred_at` of `order.created`), or null if not seen yet.
+        last_updated:
+          type: string
+          format: date-time
+          description: |
+            `occurred_at` of the most recent event the tracker applied for this order. Display only;
+            the tracker never orders events by timestamp.
+        lines:
+          type: array
+          items: { $ref: '#/components/schemas/LineStatus' }
+
+    Readiness:
+      type: object
+      required: [status, checks]
+      properties:
+        status: { type: string, enum: [ready, not_ready] }
+        checks: { type: object }
+
+    Error:
+      type: object
+      description: TODO(ALL) align with the error format in contracts/README.md once it exists.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [INVALID_ORDER_ID, ORDER_NOT_YET_VISIBLE, STATUS_UNAVAILABLE]
+        message: { type: string }
+        retry_after_seconds: { type: integer, minimum: 1 }
+
+  examples:
+    JustAccepted:
+      summary: A accepted the order; the coordinator has not reported yet.
+      value:
+        order_id: ord-7f3c9a
+        status: ACCEPTED
+        flags: { pending: true, reconciliation_required: false, replaced: false, terminal: false }
+        order_created_seen: true
+        state_version: 0
+        created_at: '2026-11-23T17:00:00Z'
+        last_updated: '2026-11-23T17:00:00Z'
+        lines:
+          - line_id: line-1
+            part_id: BMP-FR-2019CIV
+            quantity: 1
+            needed_by: '2026-11-25T17:00:00Z'
+            status: ACCEPTED
+            reason: null
+            flags: { pending: true, reconciliation_required: false, replaced: false, terminal: false }
+            selected_seller: null
+            attempt_count: 0
+            attempts: []
+            last_updated: '2026-11-23T17:00:00Z'
+          - line_id: line-2
+            part_id: HDL-LH-2019CIV
+            quantity: 2
+            needed_by: '2026-11-26T17:00:00Z'
+            status: ACCEPTED
+            reason: null
+            flags: { pending: true, reconciliation_required: false, replaced: false, terminal: false }
+            selected_seller: null
+            attempt_count: 0
+            attempts: []
+            last_updated: '2026-11-23T17:00:00Z'
+
+    InProgress:
+      summary: One line reserved with seller-2, the other still being reserved with seller-4.
+      value:
+        order_id: ord-7f3c9a
+        status: PROCESSING
+        flags: { pending: true, reconciliation_required: false, replaced: false, terminal: false }
+        order_created_seen: true
+        state_version: 6
+        created_at: '2026-11-23T17:00:00Z'
+        last_updated: '2026-11-23T17:00:03Z'
+        lines:
+          - line_id: line-1
+            part_id: BMP-FR-2019CIV
+            quantity: 1
+            needed_by: '2026-11-25T17:00:00Z'
+            status: RESERVED
+            reason: null
+            flags: { pending: true, reconciliation_required: false, replaced: false, terminal: false }
+            selected_seller:
+              seller_id: seller-2
+              attempt_id: 0b6f5f0e-2b1a-4c55-9a43-5d6c3b1f0a01
+              estimated_delivery_at: '2026-11-24T21:00:00Z'
+              delivery_status: PENDING
+              delivered_at: null
+            attempt_count: 1
+            attempts:
+              - attempt_id: 0b6f5f0e-2b1a-4c55-9a43-5d6c3b1f0a01
+                seller_id: seller-2
+                outcome: RESERVED
+                reason: null
+                started_at: '2026-11-23T17:00:02Z'
+                updated_at: '2026-11-23T17:00:02Z'
+            last_updated: '2026-11-23T17:00:02Z'
+          - line_id: line-2
+            part_id: HDL-LH-2019CIV
+            quantity: 2
+            needed_by: '2026-11-26T17:00:00Z'
+            status: RESERVING
+            reason: null
+            flags: { pending: true, reconciliation_required: false, replaced: false, terminal: false }
+            selected_seller:
+              seller_id: seller-4
+              attempt_id: 6a1d8e44-73c2-4f0e-8d1e-2b9f6c7a5b02
+              estimated_delivery_at: null
+              delivery_status: null
+              delivered_at: null
+            attempt_count: 1
+            attempts:
+              - attempt_id: 6a1d8e44-73c2-4f0e-8d1e-2b9f6c7a5b02
+                seller_id: seller-4
+                outcome: IN_PROGRESS
+                reason: null
+                started_at: '2026-11-23T17:00:03Z'
+                updated_at: '2026-11-23T17:00:03Z'
+            last_updated: '2026-11-23T17:00:03Z'
+
+    Fulfilled:
+      summary: Every line delivered, from two different sellers.
+      value:
+        order_id: ord-7f3c9a
+        status: FULFILLED
+        flags: { pending: false, reconciliation_required: false, replaced: false, terminal: true }
+        order_created_seen: true
+        state_version: 11
+        created_at: '2026-11-23T17:00:00Z'
+        last_updated: '2026-11-25T15:10:00Z'
+        lines:
+          - line_id: line-1
+            part_id: BMP-FR-2019CIV
+            quantity: 1
+            needed_by: '2026-11-25T17:00:00Z'
+            status: DELIVERED
+            reason: null
+            flags: { pending: false, reconciliation_required: false, replaced: false, terminal: true }
+            selected_seller:
+              seller_id: seller-2
+              attempt_id: 0b6f5f0e-2b1a-4c55-9a43-5d6c3b1f0a01
+              estimated_delivery_at: '2026-11-24T21:00:00Z'
+              delivery_status: DELIVERED
+              delivered_at: '2026-11-24T20:40:00Z'
+            attempt_count: 1
+            attempts:
+              - attempt_id: 0b6f5f0e-2b1a-4c55-9a43-5d6c3b1f0a01
+                seller_id: seller-2
+                outcome: DELIVERED
+                reason: null
+                started_at: '2026-11-23T17:00:02Z'
+                updated_at: '2026-11-24T20:40:00Z'
+            last_updated: '2026-11-24T20:40:00Z'
+          - line_id: line-2
+            part_id: HDL-LH-2019CIV
+            quantity: 2
+            needed_by: '2026-11-26T17:00:00Z'
+            status: DELIVERED
+            reason: null
+            flags: { pending: false, reconciliation_required: false, replaced: false, terminal: true }
+            selected_seller:
+              seller_id: seller-4
+              attempt_id: 6a1d8e44-73c2-4f0e-8d1e-2b9f6c7a5b02
+              estimated_delivery_at: '2026-11-25T16:00:00Z'
+              delivery_status: DELIVERED
+              delivered_at: '2026-11-25T15:10:00Z'
+            attempt_count: 1
+            attempts:
+              - attempt_id: 6a1d8e44-73c2-4f0e-8d1e-2b9f6c7a5b02
+                seller_id: seller-4
+                outcome: DELIVERED
+                reason: null
+                started_at: '2026-11-23T17:00:03Z'
+                updated_at: '2026-11-25T15:10:00Z'
+            last_updated: '2026-11-25T15:10:00Z'
+
+    Replaced:
+      summary: seller-3 would deliver late; its reservation was cancelled (confirmed) and seller-1 replaced it.
+      value:
+        order_id: ord-51be02
+        status: RESERVED
+        flags: { pending: true, reconciliation_required: false, replaced: true, terminal: false }
+        order_created_seen: true
+        state_version: 14
+        created_at: '2026-11-23T18:00:00Z'
+        last_updated: '2026-11-24T09:05:00Z'
+        lines:
+          - line_id: line-1
+            part_id: RAD-2018ACC
+            quantity: 1
+            needed_by: '2026-11-25T12:00:00Z'
+            status: RESERVED
+            reason: null
+            flags: { pending: true, reconciliation_required: false, replaced: true, terminal: false }
+            selected_seller:
+              seller_id: seller-1
+              attempt_id: c3e2a9b0-1f44-4d6a-bf0e-7a8d9e2c4f03
+              estimated_delivery_at: '2026-11-25T08:00:00Z'
+              delivery_status: PENDING
+              delivered_at: null
+            attempt_count: 2
+            attempts:
+              - attempt_id: 9d7c1b2a-5e6f-4a3b-8c9d-0e1f2a3b4c04
+                seller_id: seller-3
+                outcome: CANCELLED
+                reason: DELIVERY_AFTER_DEADLINE
+                started_at: '2026-11-23T18:00:02Z'
+                updated_at: '2026-11-24T09:04:00Z'
+              - attempt_id: c3e2a9b0-1f44-4d6a-bf0e-7a8d9e2c4f03
+                seller_id: seller-1
+                outcome: RESERVED
+                reason: null
+                started_at: '2026-11-24T09:04:30Z'
+                updated_at: '2026-11-24T09:05:00Z'
+            last_updated: '2026-11-24T09:05:00Z'
+
+    Unfulfilled:
+      summary: No seller could deliver before the needed-by date.
+      value:
+        order_id: ord-a90d17
+        status: UNFULFILLED
+        flags: { pending: false, reconciliation_required: false, replaced: false, terminal: true }
+        order_created_seen: true
+        state_version: 4
+        created_at: '2026-11-23T19:00:00Z'
+        last_updated: '2026-11-23T19:00:04Z'
+        lines:
+          - line_id: line-1
+            part_id: MIR-RH-2021MDL3
+            quantity: 1
+            needed_by: '2026-11-24T08:00:00Z'
+            status: UNFULFILLED
+            reason: NO_ELIGIBLE_SELLER
+            flags: { pending: false, reconciliation_required: false, replaced: false, terminal: true }
+            selected_seller: null
+            attempt_count: 0
+            attempts: []
+            last_updated: '2026-11-23T19:00:04Z'
+
+    ReconciliationRequired:
+      summary: The reservation reply was lost and the retries ran out. The outcome is still uncertain, NOT failed.
+      value:
+        order_id: ord-c4410e
+        status: RECONCILIATION_REQUIRED
+        flags: { pending: true, reconciliation_required: true, replaced: false, terminal: false }
+        order_created_seen: true
+        state_version: 9
+        created_at: '2026-11-23T20:00:00Z'
+        last_updated: '2026-11-23T20:03:10Z'
+        lines:
+          - line_id: line-1
+            part_id: BMP-FR-2019CIV
+            quantity: 1
+            needed_by: '2026-11-25T17:00:00Z'
+            status: RECONCILIATION_REQUIRED
+            reason: RETRY_BUDGET_EXHAUSTED
+            flags: { pending: true, reconciliation_required: true, replaced: false, terminal: false }
+            selected_seller:
+              seller_id: seller-5
+              attempt_id: 2f4e6a8c-0b1d-4e3f-9a5b-7c9d1e3f5a05
+              estimated_delivery_at: null
+              delivery_status: null
+              delivered_at: null
+            attempt_count: 1
+            attempts:
+              - attempt_id: 2f4e6a8c-0b1d-4e3f-9a5b-7c9d1e3f5a05
+                seller_id: seller-5
+                outcome: UNCERTAIN
+                reason: RETRY_BUDGET_EXHAUSTED
+                started_at: '2026-11-23T20:00:02Z'
+                updated_at: '2026-11-23T20:03:10Z'
+            last_updated: '2026-11-23T20:03:10Z'
