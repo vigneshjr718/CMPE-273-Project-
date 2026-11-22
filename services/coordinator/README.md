@@ -1,19 +1,22 @@
-# Coordinator - Package B, checkpoint 0
+# Coordinator - Package B
 
 This is Wendy's **component-local foundation**, following Alicia's structure.
 No files belonging to A/C/D or root infrastructure are changed.
 
 ## Current status
-Implemented: configuration, JSON application logs/request IDs, liveness/readiness,
-SQLAlchemy table definitions and an Alembic migration, draft boundary models and
-line-state rules, stable reservation-key generation, and concurrent quote-only
-selection through an isolated HTTP adapter.
+Implemented: the component foundation below, transactional order acceptance
+(see INGESTION.md), and a persisted normal reservation workflow driven manually
+(see RESERVATIONS.md). Quote/reservation calls are isolated behind provisional
+seller adapters. Every attempt/key is saved before the external reservation call;
+confirmation and outgoing event are saved atomically. PostgreSQL session locks
+serialize order drivers. Repeating a completed reservation flow does not reserve
+again; ambiguous writes remain UNKNOWN for later reconciliation.
 
-**Not implemented yet:** order Kafka consumer, durable workflow orchestration,
-reservation writes, reconciliation, cancellation/replacement, delivery polling,
-outbox relay and recovery workers. An available schema or a passing health check
-does not mean the complete business workflow works. There is deliberately no
-public endpoint that pretends to accept/process orders.
+**Not implemented yet:** order Kafka consumer, automatic scheduling, lookup/retry
+reconciliation, cancellation/replacement, delivery polling, outbox relay and
+full recovery workers. The manual driver conservatively marks an interrupted
+RESERVING attempt UNKNOWN rather than creating a fresh reservation. There is
+deliberately no public endpoint that pretends to accept/process orders.
 
 All incoming-event/quote shapes and topic names are **proposals**, not approved
 team contracts. See [integration-proposal.md](integration-proposal.md).
@@ -30,9 +33,10 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-The tests do not require Docker or a running seller/DB/broker. They use controlled
+The default tests do not require Docker or a running seller/DB/broker. They use controlled
 HTTP fixtures and temporary **SQLite** databases for local schema/transaction
-checks. These are not PostgreSQL locking or Kafka integration tests.
+checks. Opt-in PostgreSQL tests and their command are documented in RESERVATIONS.md.
+Kafka integration tests are not yet present.
 
 To start the foundation:
 
@@ -84,6 +88,7 @@ The constraints file includes test-package pins but they are installed only by
 requirements-dev.txt. Do not commit .env, virtual environments or test DBs.
 
 ## Verification and next checkpoint
-See [CHECKPOINT.md](CHECKPOINT.md) for exact verification limits.
-Next: accept order events transactionally, persist workflows, then connect
-reservation/reconciliation adapters. Save an attempt/key before external writes.
+See CHECKPOINT.md for historical foundation verification and INGESTION.md /
+RESERVATIONS.md for later increments. Run alembic upgrade head after this update;
+migration 0002 preserves existing accepted orders. Next: implement lookup/retry
+reconciliation, compensation and Kafka transport against agreed team contracts.
