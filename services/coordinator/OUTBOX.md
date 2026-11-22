@@ -1,12 +1,11 @@
-# Checkpoint 4: PostgreSQL outbox -> Kafka
+# PostgreSQL outbox to Kafka
 
-Based on Wendy's pushed checkpoint **db88e19**. All changes are in
-services/coordinator/. No shared infra/contracts or teammates' code is changed.
-Install the added pinned aiokafka dependency; no database migration is needed.
-Keep the existing .env. New settings have defaults.
+The relay publishes saved workflow events using their original IDs and order keys.
+Install requirements-dev.txt for local verification and apply current migrations
+with `python -m alembic upgrade head` before running tests or the relay.
 
 ## First: install and test without Kafka
-From the repository root after extracting the increment:
+From the repository root:
 ```bash
 cd services/coordinator
 source .venv/bin/activate
@@ -14,13 +13,11 @@ python -m pip install -r requirements-dev.txt
 python -m pip check
 COORDINATOR_POSTGRES_TESTS=1 python -m pytest -q
 ```
-The real broker test is separately opt-in, so one skipped test is intentional
-at this step. Expected Mac result: **93 passed, 1 skipped**. With both opt-ins
-enabled and a working broker, expect **94 passed**.
-Preparation environment: **87 passed, 7 skipped** (no PostgreSQL/Docker there).
-The PostgreSQL tests create/remove only their own unique test order records.
+Real Kafka tests are opt-in; without both infrastructure flags those checks
+are skipped. See VERIFICATION.md for recorded results. Tests create/remove only
+their own uniquely generated records.
 
-## Isolated local Kafka for Wendy's Mac
+## Isolated local Kafka
 Use D's existing broker if available, setting the bootstrap address accordingly.
 Otherwise this **development-only single broker** uses host port 19092 to avoid
 colliding with common localhost:9092 labs. The advertised address must match the
@@ -158,8 +155,7 @@ sequenceDiagram
 - PLAINTEXT is a local/trusted-network setup. Managed Kafka SASL/TLS adapters
   and credentials are a deployment agreement, not implemented by this increment.
 - The HTTP /ready endpoint covers its DB/schema only. The separate relay exits
-  nonzero on failures; worker/Kafka readiness and automatic orchestration remain
-  follow-up work. Inspect queue backlog and process status during deployment.
+  nonzero on failures; combined worker/Kafka readiness remains deployment work. Inspect queue backlog and process status during deployment.
 
 ## References checked during implementation
 - https://aiokafka.readthedocs.io/en/stable/producer.html
@@ -167,7 +163,7 @@ sequenceDiagram
 - https://kafka.apache.org/41/getting-started/docker/
 - https://github.com/apache/kafka/blob/trunk/docker/examples/docker-compose-files/single-node/plaintext/docker-compose.yml
 
-## Remaining Package B work
-Incoming Kafka order consumer/offset handling; automatic pending-work scheduling;
-cancellation/fencing and safe replacement; delivery polling; full process restart
-demo; real A/C/D integration; benchmarks and final report/architecture handoff.
+## Related processes and pending integration
+Incoming orders use ORDER_CONSUMER.md; automatic workflows use SCHEDULER.md.
+Live A/C/D integration, broader deployment verification and final performance/
+report evidence remain pending. See VERIFICATION.md for current validation limits.

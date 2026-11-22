@@ -1,21 +1,16 @@
-# Checkpoint 3: bounded reservation reconciliation
+# Bounded reservation reconciliation
 
-Based on pushed commit **cd5b597**. No new dependency or migration is needed.
-Only coordinator-owned files change; .env and shared infra/contracts are excluded.
-The existing PostgreSQL database must already be at 0002_reservation_flow.
+Apply current migrations before running drivers (see README.md).
 
-## Test on Wendy's Mac
+## Local verification
 With the local database running and services/coordinator/.venv active:
 ```bash
 COORDINATOR_POSTGRES_TESTS=1 python -m pytest -q
 python -m app.tools.demo_reconciliation
 ```
 
-Preparation environment: 73 passed, 4 PostgreSQL tests skipped because no local
-PostgreSQL executable/Docker is available there. Opting into the real database
-on Wendy's Mac should yield 77 passing tests if all checks succeed.
-The PostgreSQL tests create unique synthetic test orders and remove only their
-own generated records. Existing demo-order-001 remains unchanged.
+See VERIFICATION.md for current results. PostgreSQL tests create unique
+synthetic orders and remove only their own records.
 
 The demo creates a NEW unique synthetic order by default. Expect:
 - Before: order RECONCILIATION_REQUIRED, line UNKNOWN, one saved attempt/key.
@@ -76,8 +71,8 @@ After a known failed call, backoff is measured from failure completion, not
 from its start. Exhausted lines require explicit intervention/compensation;
 this driver does not automatically reset the budget.
 
-Normal driver run_order and Reconciler.run_order are separate manual entry
-points for now; automatic DB-backed scheduling/recovery is still to be added.
+Normal driver run_order and Reconciler.run_order remain separate manual entry
+points. The durable worker coordinates them automatically; see SCHEDULER.md.
 The normal driver leaves an interrupted RESERVING as UNKNOWN. Reconciliation
 can then inspect/retry the saved operation under the budget above.
 
@@ -90,8 +85,7 @@ per-order increasing version and outbox envelope.
 Snapshots now include retry_count and next_retry_at.
 No authoritative contracts/ schemas were edited; these remain review proposals.
 
-## Remaining work
-- Cancellation/fencing, safe replacement and delivery polling.
-- Kafka consumer and outbox relay; all events are still only saved locally.
-- Automatic pending-work/reconciliation scheduling and full restart recovery.
-- Real A/C/D API integration, deployment, benchmarks, diagrams/report/demo.
+## Integration limits
+Live A/C/D compatibility and deployment verification remain pending. Delivery,
+cancellation, safe replacement, Kafka intake/publication and automatic scheduling
+are documented in their respective guides; recorded evidence is in VERIFICATION.md.

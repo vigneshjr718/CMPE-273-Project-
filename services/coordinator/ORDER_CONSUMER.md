@@ -1,19 +1,11 @@
-# Checkpoint 7: incoming Kafka orders and offset handling
+# Incoming Kafka orders and offset handling
 
-Base: `18256269b1cf3aed58d9166a0a4f9b7d41f71c80` (verified checkpoint 6, PR #8).
-All changes are under services/coordinator/. No dependency or migration change;
-checkpoint7 required schema was **0004_cancellation**; checkpoint8 requires0005. Existing .env, data, saved operation
-keys, earlier demos and frozen PR branches are preserved.
+Intake accepts workflows into PENDING/version1 through the transactional handler.
+The separate worker schedules reservation, reconciliation and delivery work; see
+SCHEDULER.md. A/D topics and envelopes remain provisional, pending live integration.
 
-A/D contracts are still absent from the inspected remote branches (November 20,
-2026). This is a provisional transport around the existing transactional intake,
-not proof of live A/D compatibility. It accepts workflows into PENDING/version1;
-reservation/reconciliation/delivery scheduling is now implemented separately
-in checkpoint8; see SCHEDULER.md.
-
-## Mac verification
-
-Apply the guarded checkpoint installer from the repository root, then:
+## Local verification
+From the repository root, with the Python virtual environment created:
 
 ```bash
 cd services/coordinator
@@ -25,10 +17,10 @@ python -m app.tools.demo_order_consumer
 ```
 
 Keep existing PostgreSQL/Kafka containers running and current migrations applied
-(checkpoint8 requires schema0005; run alembic upgrade head after that increment).
+(run `python -m alembic upgrade head`; current head is 0005_workflow_jobs).
 The real demo creates a fresh synthetic two-partition topic, consumer group and
 orders. It does not read/reset shared topics/groups or contact any seller.
-Expected sequence (not evidence until run):
+Expected sequence (recorded run in VERIFICATION.md):
 
 1. Real broker delivers an order; workflow+inbox+outbox commit together. A
    controlled failure occurs before the Kafka offset commit. Broker offset is null.
@@ -141,6 +133,6 @@ bounds startup/poll/commit/cleanup requests; batch size informs max_poll_interva
 
 Local tests exercise actual temporary SQLite intake transactions and controlled
 consumer/commit/rebalance failures. Opt-in tests add real PostgreSQL persistence
-and a real PostgreSQL/Kafka two-partition demo. Preparation results and remaining
-Mac checks are recorded in CHECKPOINT_7.md. No end-to-end exactly-once, live A/D
-integration, broker HA or complete process restart recovery is claimed.
+and a real PostgreSQL/Kafka two-partition demo. Recorded results and verification limits are in VERIFICATION.md. No end-to-end exactly-once, live A/D
+integration, broker HA or all-process deployment recovery is claimed. The separate workflow-worker restart
+demo is described in SCHEDULER.md.

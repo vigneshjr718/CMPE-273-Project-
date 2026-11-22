@@ -1,12 +1,7 @@
-# Checkpoint 5: delivery observations and late detection
+# Delivery observations and late detection
 
-Based on pushed commit **af24129**, the Kafka outbox checkpoint (PR #6).
-Only services/coordinator/ changes. No new dependency. Existing .env is preserved.
-
-## Install and verify on Wendy's Mac
-
-Keep the local PostgreSQL container running. After extracting this increment at
-the repository root, activate services/coordinator/.venv, then:
+## Local verification
+With PostgreSQL running, activate services/coordinator/.venv, then:
 
 ```bash
 python -m alembic upgrade head
@@ -15,8 +10,8 @@ COORDINATOR_POSTGRES_TESTS=1 python -m pytest -q
 
 Migration **0003_delivery_polling** adds delivery_checks, preserving existing
 accepted orders, attempts, reservation keys and outbox records. No data reset or
-old migration rewrite is used. /ready now requires revision 0003; restart an old
-uvicorn process to load updated code before checking its readiness again.
+old migration rewrite is used. Apply all migrations through 0005_workflow_jobs
+and restart older processes before checking current readiness.
 
 If the Kafka container is also running, use both opt-ins:
 
@@ -62,7 +57,7 @@ python -m app.tools.poll_delivery --order-id YOUR_ORDER_ID
 
 This command calls configured seller URLs. It runs one bounded due batch for one
 order and exits. It is not started by uvicorn and is not a background scheduler.
-The automatic scheduler/restart sweep remains checkpoint 8. Each newly created
+The automatic scheduler and restart recovery are described in SCHEDULER.md. Each newly created
 DeliveryPoller reads the durable schedule and evidence, so fresh drivers respect
 previous checks/backoff. Calls before next_poll_at send no request or event.
 
@@ -124,7 +119,7 @@ Only RESERVED attempts are polled. UNKNOWN attempts still use reconciliation.
   Delivered + reserved remains RESERVED until the remaining deliveries arrive.
   FULFILLED means all arrived; DELIVERED_AFTER_DEADLINE preserves actual lateness.
 - No seller switch, cancellation, stock release or new reservation occurs here.
-  Confirmed cancellation and replacement belong to checkpoint 6.
+  Confirmed cancellation and replacement are described in REPLACEMENT.md.
 
 Changes and outgoing events commit in one local transaction. Proposed events:
 line.delivery_updated, line.delivery_delayed, line.delivery_check_deferred,
@@ -153,13 +148,9 @@ The per-order PostgreSQL lock also excludes reservation/reconciliation drivers.
 Result recording rechecks the current attempt/state so an obsolete reply cannot
 complete a replacement attempt. Terminal delivered state never regresses.
 
-## Verification limits and remaining work
-
-Preparation suite: **117 passed, 9 skipped in 10.26s**; pip check and whitespace
-check passed. This uses temporary SQLite/HTTP fixtures, not real PostgreSQL.
-Expected Mac PostgreSQL-only result: **125 passed, 1 skipped**. With both opt-ins
-and a working broker, expect **126 passed**. These Mac counts remain unverified
-until Wendy runs them.
-Actual C/D compatibility, full process kill/restart, cancellation/fencing/safe
-replacement, incoming Kafka order transport, automatic scheduling, deployment,
-benchmarks and final report handoff remain outstanding.
+## Verification limits
+See VERIFICATION.md for recorded PostgreSQL/Kafka and controlled demo results.
+The delivery demo uses a controlled seller and clock; it does not establish
+live C/D compatibility, elapsed-time performance or seller persistence. The
+separate process restart demo is documented in SCHEDULER.md. Live integration,
+broader deployment verification, benchmarks and final report remain pending.

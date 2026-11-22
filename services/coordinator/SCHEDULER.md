@@ -1,15 +1,14 @@
-# Checkpoint 8: durable scheduling and worker process restart recovery
+# Durable scheduling and worker process restart recovery
 
-Base: `2d4479f7dfb2c32e408fc3e9c572ce1176c9ef64`, verified checkpoint7/PR#9.
-Coordinator-only increment; no dependency change. **Additive migration
+**Additive migration
 0005_workflow_jobs must run before tests or any updated process.** It creates
 workflow_jobs and backfills accepted workflows, preserving existing business
 rows, attempt keys, cancellation/delivery schedules and outbox evidence. Terminal
 orders get COMPLETE jobs with no due time; unfinished orders get READY jobs.
 
-## Mac verification
+## Local verification
 
-Apply the guarded installer from the repository root, then:
+From the repository root, with the Python virtual environment created:
 
 ```bash
 cd services/coordinator
@@ -23,9 +22,8 @@ python -m app.tools.demo_restart
 
 Keep the existing PostgreSQL/Kafka containers running. Restart any older HTTP,
 consumer or relay process after upgrading; readiness now requires revision0005.
-The installer does not replace .env, migrate, start background workers, commit,
-push or touch teammates' infrastructure. Existing test cleanup handles the new
-job FK and still deletes only its own unique synthetic orders.
+Migrations do not start background workers. Test cleanup handles job foreign
+keys and deletes only its own unique synthetic orders.
 
 ## Actual OS-process demo, not object recreation
 
@@ -47,8 +45,8 @@ Expected result: both orders FULFILLED, jobs COMPLETE with no next run, old
 attempt/key preserved in history; case attempt counts1 and2; total reservation
 HTTP calls3/logical reservations3, cancellation calls2/terminal fences1. Output
 includes killed/recovered PIDs and exit codes. Killed workers have nonzero exit
-codes; recovered workers stop gracefully with code0. These are expectations
-until the actual Mac verification is recorded in CHECKPOINT_8.md.
+codes; recovered workers stop gracefully with code0. Both scenarios passed on macOS with real PostgreSQL and controlled HTTP
+sellers; exact results and verification limits are in VERIFICATION.md.
 
 The fixture's ledger is memory in the surviving parent, NOT proof C persists
 fences or survives seller restart. B's state/schedule is real PostgreSQL. Kafka

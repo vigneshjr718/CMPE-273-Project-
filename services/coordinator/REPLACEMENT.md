@@ -1,14 +1,10 @@
-# Checkpoint 6: confirmed cancellation and safe replacement
+# Confirmed cancellation and safe replacement
 
-Prepared against commit `4599229657cf4fabba81ff77f4380639c5efab76`.
-All changes are coordinator-owned. C's source/contract remains absent from the
-remote main/development/review branches inspected November 20, 2026. This is
-independent verification with controlled sellers; live C integration is pending.
+The seller fencing contract is provisional. Controlled demos validate coordinator
+behavior, while live C integration and C's persistent fencing require joint checks.
 
-## Run on Wendy's Mac
-
-From the repository root on `feature/package-b-coordinator`, apply the increment
-with the supplied guarded installer, then:
+## Local verification
+From the repository root with the Python virtual environment created:
 
 ```bash
 cd services/coordinator
@@ -30,7 +26,7 @@ seller ledger and controlled clock. Expected behavior: late seller-1 -> lost
 cancellation reply -> CANCELLATION_PENDING with one reservation -> repeat skips
 until due -> identical cancellation key recovers receipt -> seller-2 RESERVED
 with a new attempt/key. Expected reserve_calls=2, cancel_calls=2, one terminal
-fence. These are expectations until run on the Mac, not live seller evidence.
+fence. Recorded results are in VERIFICATION.md; this is controlled seller evidence.
 The demo retains its unique order as evidence and does not contact seller HTTP
 endpoints or publish Kafka records. Kafka is exercised by the separate opt-in test.
 
@@ -86,8 +82,7 @@ Every reply must identify the exact seller/original key/cancellation key/part/
 quantity, and the reservation ID when B already knows it.
 
 status_version is a monotonic C counter for the original reservation operation,
-shared with its delivery observations (extending checkpoint 5's per-reservation
-counter to an original key before reservation ID exists). Identical observations
+shared with its delivery observations (using the original key even before a reservation ID exists). Identical observations
 keep their version. Changed payloads at the same version and lower versions are
 rejected; a terminal change must exceed B's prior IN_TRANSIT version. C must
 confirm this shared counter before integration. Never synthesize it from time.
@@ -107,7 +102,7 @@ a boolean or a receipt string from an incompatible endpoint is insufficient.
   backoff after the response. A crashed claim consumes budget. Exhaustion keeps
   the line pending, check REQUIRED and no next retry. Repeating the command or
   recreating the driver does not reset a REQUIRED check. Manual review with C is
-  needed; no unsafe retry-reset endpoint is provided in this checkpoint.
+  needed; no unsafe retry-reset endpoint is provided by the coordinator.
 - Confirm terminal proof, old attempt CANCELLED, line REPLACING and line.cancelled
   event atomically. Persisted proof is revalidated before replacement, including
   when a normal driver resumes QUOTING after interruption.
@@ -118,7 +113,7 @@ a boolean or a receipt string from an incompatible endpoint is insufficient.
   RECONCILIATION_REQUIRED and can be retried through the replacement command
   without recancelling. If a delivery wins the race, it becomes DELIVERED instead.
 - A fresh driver resumes committed cancellation/quoting intent. Automatic scanning
-  and full process restart demonstrations remain checkpoint 8.
+  and the full worker process restart demo are described in SCHEDULER.md.
 
 ## Events and evidence for D
 
@@ -132,8 +127,8 @@ line_attempts and outbox after a replacement takes ownership of the line.
 
 ## Verification
 
-Preparation results and remaining checks are recorded in CHECKPOINT_6.md.
+Recorded verification and remaining integration limits are in VERIFICATION.md.
 Temporary SQLite tests exercise actual coordinator transactions with controlled
 sellers; opt-in PostgreSQL tests additionally verify committed cancellation
 intent and peer-driver lock exclusion. They do not prove C's implementation or
-end-to-end exactly-once behavior. No main merge or teammate message is performed.
+end-to-end exactly-once behavior.
