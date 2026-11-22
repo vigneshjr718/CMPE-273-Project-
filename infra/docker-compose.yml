@@ -1,0 +1,294 @@
+# PartStream runtime. Owner: D. Each service block is supplied by its owner.
+# Commands: see "Running PartStream (Package D)" in the root README.md.
+#
+#   Without --profile apps: only postgres, kafka, kafka-init
+#   With    --profile apps: also every application service
+#
+# This base file is the cloud-safe layout: ONLY the frontend/proxy publishes a
+# host port. For local development, add -f infra/docker-compose.dev.yml, which
+# publishes 127.0.0.1-only ports for postgres, kafka and each API.
+#
+# PLACEHOLDER blocks are marked "PLACEHOLDER — owner: X". To claim yours, send D a
+# PR (or a compose fragment) that replaces the whole block. Keep the service name,
+# port, network and the depends_on conditions unless agreed otherwise.
+#
+# Secrets/config come from infra/.env (copy infra/.env.example; never commit .env).
+
+name: partstream
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# Every application service waits for a healthy DB and for topics to exist.
+x-app-depends: &app-depends
+  postgres:
+    condition: service_healthy
+  kafka-init:
+    condition: service_completed_successfully
+
+services:
+  # ---------------------------------------------------------------- infrastructure (D)
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/.env}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Owner: C. infra/db-init/init.sql creates every service DB + role.
+      # Postgres runs these scripts ONLY when the volume is empty (first start).
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [partstream]
+    logging: *default-logging
+
+  kafka:
+    image: apache/kafka:4.1.2   # same image B's coordinator tests used
+    restart: unless-stopped
+    environment:
+      # Single-node KRaft (broker + controller in one process, no ZooKeeper).
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # PLAINTEXT = containers on the partstream network (kafka:9092).
+      # HOST      = developer laptop via the dev override (localhost:9092).
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Must never change once the volume holds data.
+      CLUSTER_ID: wP0BBMU1SeK3-KFgQCnjmA
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # Topics are created only by kafka-init (see contracts/events/topics.md).
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: "3"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    expose:
+      - "9092"
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 10s
+      start_period: 15s
+      retries: 12
+    networks: [partstream]
+    logging: *default-logging
+
+  # One-shot job: creates/validates the topics in contracts/events/topics.md, then exits 0.
+  kafka-init:
+    image: apache/kafka:4.1.2
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVER: kafka:9092
+      KAFKA_BIN: /opt/kafka/bin
+    volumes:
+      - ./kafka/create-topics.sh:/scripts/create-topics.sh:ro
+    # Strip CRLF in case a Windows checkout converted line endings.
+    entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /scripts/create-topics.sh > /tmp/create-topics.sh && sh /tmp/create-topics.sh"]
+    networks: [partstream]
+    logging: *default-logging
+
+  # ---------------------------------------------------------------- applications
+  # All app services are in the "apps" profile, so starting infra alone works before
+  # every owner has a Dockerfile. Add `--profile apps` to start them.
+
+  # PLACEHOLDER — owner: A (order service, port 8001, order_db)
+  order:
+    profiles: [apps]
+    build:
+      context: ../services/order
+    restart: unless-stopped
+    env_file:
+      - path: ../services/order/.env
+        required: false
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092   # A: rename to your prefixed variable
+    expose:
+      - "8001"
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  # Owner: B. Merged from services/coordinator/compose.fragment.yaml (main @ a7b9c13).
+  # D changes vs the fragment: no host port here (dev override adds it), Kafka and
+  # topic settings point at shared infra, and seller URLs use the Section 0 ports.
+  # B: intake/worker/relay processes (from your later branches) get added when merged to main.
+  coordinator:
+    profiles: [apps]
+    build:
+      context: ../services/coordinator
+    restart: unless-stopped
+    env_file:
+      - path: ../services/coordinator/.env
+        required: false
+    environment:
+      COORDINATOR_DATABASE_URL: ${COORDINATOR_DATABASE_URL:?set COORDINATOR_DATABASE_URL in infra/.env}
+      COORDINATOR_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      COORDINATOR_INCOMING_TOPIC: order.created
+      COORDINATOR_WORKFLOW_TOPIC: workflow.events
+      COORDINATOR_SELLER_URLS: '{"seller-1":"http://seller-1:8101","seller-2":"http://seller-2:8102","seller-3":"http://seller-3:8103","seller-4":"http://seller-4:8104","seller-5":"http://seller-5:8105"}'
+    expose:
+      - "8002"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  # Owner: D (tracker + status API, port 8004, tracker_db). One process: migrations on
+  # start, then API + Kafka consumer. Status API: GET /status/orders/{order_id}.
+  tracker:
+    profiles: [apps]
+    build:
+      context: ../services/tracker
+    restart: unless-stopped
+    env_file:
+      - path: ../services/tracker/.env
+        required: false
+    environment:
+      TRACKER_DATABASE_URL: ${TRACKER_DATABASE_URL:?set TRACKER_DATABASE_URL in infra/.env}
+      TRACKER_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      TRACKER_ORDER_TOPIC: order.created
+      TRACKER_WORKFLOW_TOPIC: workflow.events
+      TRACKER_CONSUMER_GROUP: tracker-v1
+      TRACKER_PORT: "8004"
+    expose:
+      - "8004"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  # PLACEHOLDER — owner: C (one seller image, five instances, ports 8101-8105).
+  # C: confirm how the image receives its listen port / seller ID / DB URL and
+  # replace the env below. Config files planned at services/seller/config/seller-N.env.
+  seller-1:
+    profiles: [apps]
+    build: &seller-build
+      context: ../services/seller
+    restart: unless-stopped
+    env_file:
+      - path: ../services/seller/config/seller-1.env
+        required: false
+    environment:
+      SELLER_ID: seller-1
+      PORT: "8101"
+    expose: ["8101"]
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  seller-2:
+    profiles: [apps]
+    build: *seller-build
+    restart: unless-stopped
+    env_file:
+      - path: ../services/seller/config/seller-2.env
+        required: false
+    environment:
+      SELLER_ID: seller-2
+      PORT: "8102"
+    expose: ["8102"]
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  seller-3:
+    profiles: [apps]
+    build: *seller-build
+    restart: unless-stopped
+    env_file:
+      - path: ../services/seller/config/seller-3.env
+        required: false
+    environment:
+      SELLER_ID: seller-3
+      PORT: "8103"
+    expose: ["8103"]
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  seller-4:
+    profiles: [apps]
+    build: *seller-build
+    restart: unless-stopped
+    env_file:
+      - path: ../services/seller/config/seller-4.env
+        required: false
+    environment:
+      SELLER_ID: seller-4
+      PORT: "8104"
+    expose: ["8104"]
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  seller-5:
+    profiles: [apps]
+    build: *seller-build
+    restart: unless-stopped
+    env_file:
+      - path: ../services/seller/config/seller-5.env
+        required: false
+    environment:
+      SELLER_ID: seller-5
+      PORT: "8105"
+    expose: ["8105"]
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  # PLACEHOLDER — owner: A (frontend + public proxy). The ONLY publicly exposed service.
+  # A: if you split this into a Caddy "proxy" + static "frontend", only the proxy keeps
+  # the published port (routes: / -> frontend, /api/orders -> order:8001,
+  # /api/status -> tracker:8004).
+  frontend:
+    profiles: [apps]
+    build:
+      context: ../services/frontend
+    restart: unless-stopped
+    ports:
+      - "${PUBLIC_HTTP_PORT:-80}:80"
+    depends_on:
+      order:
+        condition: service_started
+      tracker:
+        condition: service_started
+    networks: [partstream]
+    logging: *default-logging
+
+networks:
+  partstream:
+    name: partstream
+
+volumes:
+  postgres-data:
+  kafka-data:
