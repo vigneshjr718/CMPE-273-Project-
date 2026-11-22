@@ -84,3 +84,73 @@ The system also uses **Kafka** to send order and delivery information between se
 | **Database** | PostgreSQL (one server, a separate database for each service) |
 | **Testing** | Python test scripts (send many orders, stop or slow sellers) |
 | **Running everything** | Docker Compose |
+
+---
+
+## Running PartStream (Package D: runtime)
+
+Requires Docker with Compose v2.24 or newer. Run every command from the repository root.
+Locally, always pass both compose files. `infra/docker-compose.dev.yml` publishes Postgres,
+Kafka and each API on `127.0.0.1` only. Topics, keys and producers are listed in
+[contracts/events/topics.md](contracts/events/topics.md).
+
+**1. First time only: create your local config**
+```bash
+cp infra/.env.example infra/.env
+```
+`infra/.env` is git-ignored. If a port is already taken on your machine (for example a local
+PostgreSQL on 5432), change `POSTGRES_HOST_PORT` / `KAFKA_HOST_PORT` there.
+
+**2. Start infrastructure only** (Postgres, Kafka, then roles/databases and topics)
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --wait postgres kafka
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml run --rm db-init
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml run --rm kafka-init
+```
+`db-init` runs `infra/db-init/*.sql` with the `*_DB_PASSWORD` values from `infra/.env`, and
+`kafka-init` prints `ok <topic>` for each topic. Both exit 0 and are safe to re-run.
+(Don't rely on `up --wait` for these one-shot jobs: it can return before they finish.)
+
+**3. Start all application services**
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml --profile apps up -d --build
+```
+Apps wait until Postgres is healthy and `db-init` and `kafka-init` have finished. A service whose
+`services/<name>/` folder is still a placeholder fails to build. To start only some, name
+them: `... --profile apps up -d --build tracker coordinator`.
+
+**4. Stop everything (data is kept)**
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml --profile apps down
+```
+
+**5. Logs and status**
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml --profile apps logs -f --tail=100 tracker   # omit the name for all
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml --profile apps ps -a
+```
+
+**6. Tracker tests** (no Docker needed; see [services/tracker/README.md](services/tracker/README.md))
+```bash
+cd services/tracker
+python3.12 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+**7. Cloud VM: leave out the dev file** so that no Postgres/Kafka/API ports are exposed.
+Only the frontend/proxy (port 80) is published.
+```bash
+docker compose -f infra/docker-compose.yml --profile apps up -d --build
+```
+
+**8. Wipe all data**
+
+> ⚠️ **`down -v` permanently deletes the `postgres-data` and `kafka-data` volumes**: every
+> database (orders, workflows, inventory, tracker state) and every Kafka topic, message and
+> consumer offset. It cannot be undone. Never run it on the cloud VM without a verified backup.
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml --profile apps down -v
+```
+After a wipe, the next start recreates the roles and databases (`db-init`, which runs
+`infra/db-init/*.sql` on every start), and step 2 recreates the topics.

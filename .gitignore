@@ -1,0 +1,49 @@
+# Local planning documents (not part of the repository)
+/CMPE273_Team_Work_Plan.pdf
+/PARTSTREAM_STRUCTURE_EN.md
+
+# Secrets / local config (commit only *.env.example)
+.env
+*.env
+!*.env.example
+!services/seller/config/seller-*.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local test databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Backups and dumps (may contain data; keep out of git)
+backups/
+*.dump
+*.sql.gz
+
+# Cloud credentials / keys
+*.pem
+*.key
+infra/cloud/*.tfstate*
+infra/cloud/.terraform/
+
+# Benchmark scratch output (final results go in benchmarks/results/)
+benchmarks/**/tmp/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
