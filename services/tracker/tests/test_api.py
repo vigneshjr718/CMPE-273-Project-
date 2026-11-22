@@ -123,6 +123,16 @@ async def test_health_and_ready(client):
     assert (await client.get("/health")).json() == {"status": "ok", "service": "tracker"}
     ready = await client.get("/ready")
     assert ready.status_code == 200  # consumer disabled in this test app
+    assert ready.json()["checks"]["dead_letter_events"] == 0
+
+
+async def test_ready_reports_dead_letters_but_stays_ready(client, projector):
+    await projector.dead_letter(ev.ORDER_TOPIC, 0, 0, b"{broken", "message is not UTF-8 JSON")
+    await projector.dead_letter(ev.ORDER_TOPIC, 0, 0, b"{broken", "redelivered")  # same position
+    await projector.dead_letter(ev.WORKFLOW_TOPIC, 2, 9, None, "tombstone")
+    ready = await client.get("/ready")
+    assert ready.status_code == 200 and ready.json()["status"] == "ready"
+    assert ready.json()["checks"]["dead_letter_events"] == 2
 
 
 async def test_ready_fails_when_consumer_not_running(sessions):

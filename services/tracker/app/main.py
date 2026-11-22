@@ -34,7 +34,7 @@ def create_app(settings: Settings | None = None, source_factory=None) -> FastAPI
             factory = source_factory or (lambda: KafkaEventSource(settings))
             task = asyncio.create_task(supervise(
                 factory, projector, status=app.state.consumer_status, stop=stop,
-                skip_invalid=settings.skip_invalid_events,
+                dead_letter_invalid=settings.dead_letter_invalid,
                 backoff=settings.consumer_restart_backoff_seconds,
                 backoff_max=settings.consumer_restart_backoff_max_seconds))
         try:

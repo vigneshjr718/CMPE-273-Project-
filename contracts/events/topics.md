@@ -85,5 +85,7 @@ The current shape on B's branch is:
 2. A: add `state_version` to `order.created`? D proposes a fixed `0`, so creation always sorts
    before B's first version (`1`).
 3. B: confirm the final list of `workflow.events` event types and payloads (`workflow.*.json`).
-4. Everyone: is a dead-letter topic needed? v1 has none. A consumer that cannot parse an
-   event stops and alerts instead of skipping it.
+4. Everyone: is a shared dead-letter *topic* needed? v1 has none. Each consumer handles
+   unparseable messages itself. The tracker records them in its own `dead_letter_events` table,
+   keeps consuming, and reports the count in `/ready` (it can be switched to stop instead).
+   Other consumers choose and document their own policy.

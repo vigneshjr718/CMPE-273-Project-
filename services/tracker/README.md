@@ -14,8 +14,14 @@ order, line and seller progress. Serves it at `GET /status/orders/{order_id}`
 - **Producer authority:** `order.created` topic accepts producer `order` only; `workflow.events`
   accepts producer `coordinator` only. Violations are recorded and ignored.
 - **Timestamps are never used for ordering.**
-- **Invalid events:** an unparseable message stops the consumer, and its offset is not committed.
-  `/ready` reports it. To skip and record such messages instead, set `TRACKER_SKIP_INVALID_EVENTS=true`.
+- **Unparseable messages** (not JSON, bad envelope, invalid `order.created` lines, coordinator
+  event without `state_version`): by default they are written to `dead_letter_events` and the
+  consumer keeps going. That row commits before the offset, and it is keyed by
+  topic/partition/offset, so a redelivery cannot create a second one. `/ready` shows the count
+  in `checks.dead_letter_events` but stays ready. To halt on them instead (offset not
+  committed), set `TRACKER_INVALID_EVENT_POLICY=stop`.
+  Events that parse but come from the wrong producer are not dead letters. They are recorded
+  in `processed_events` as `rejected_authority`.
 - **Restarts:** if the consumer fails, it restarts in-process with backoff and resumes from the
   last committed offsets.
 

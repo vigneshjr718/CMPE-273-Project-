@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (JSON, BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey,
-                        Index, Integer, String)
+                        Index, Integer, LargeBinary, String, UniqueConstraint)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 TS = DateTime(timezone=True)
@@ -94,6 +94,34 @@ class ProcessedEvent(Base):
     event_type: Mapped[str | None] = mapped_column(String(80))
     producer: Mapped[str | None] = mapped_column(String(40))
     order_id: Mapped[str | None] = mapped_column(String(128))
-    # applied | stale | rejected_authority | duplicate_creation | invalid_skipped
+    # applied | stale | rejected_authority | duplicate_creation
     outcome: Mapped[str] = mapped_column(String(30))
     processed_at: Mapped[datetime] = mapped_column(TS)
+
+
+DEAD_LETTER_MAX_BYTES = 65536
+
+
+class DeadLetterEvent(Base):
+    """Messages that could not be interpreted at all (no trustworthy event_id).
+
+    Keyed by Kafka position, so a redelivery after a crash cannot create a second row.
+    Never applied to the projection. Inspect, fix the producer, and republish if needed.
+    """
+    __tablename__ = "dead_letter_events"
+
+    id: Mapped[int] = mapped_column(AUTO_ID, primary_key=True, autoincrement=True)
+    topic: Mapped[str] = mapped_column(String(128))
+    kafka_partition: Mapped[int] = mapped_column(Integer)
+    kafka_offset: Mapped[int] = mapped_column(BigInteger)
+    reason: Mapped[str] = mapped_column(String(300))
+    # Best-effort, extracted only if the message is JSON; for operators, not for dedupe.
+    event_id: Mapped[str | None] = mapped_column(String(128))
+    order_id: Mapped[str | None] = mapped_column(String(128))
+    raw_value: Mapped[bytes | None] = mapped_column(LargeBinary)  # None = tombstone
+    raw_size: Mapped[int] = mapped_column(Integer)
+    truncated: Mapped[bool] = mapped_column(Boolean)  # raw_value cut at DEAD_LETTER_MAX_BYTES
+    received_at: Mapped[datetime] = mapped_column(TS)
+
+    __table_args__ = (UniqueConstraint("topic", "kafka_partition", "kafka_offset",
+                                       name="uq_dead_letter_position"),)

@@ -9,6 +9,7 @@ Guarantees (each event is handled in ONE database transaction):
     producer "coordinator" only. Anything else is recorded and ignored.
   * Timestamps (occurred_at) are stored for display and never used for ordering.
 """
+import json
 import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -21,7 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.events import (CreationLine, Event, InvalidEvent, creation_lines, decode,
                         parse_datetime)
-from app.models import LineStatus, OrderStatus, ProcessedEvent, StatusHistory
+from app.models import (DEAD_LETTER_MAX_BYTES, DeadLetterEvent, LineStatus, OrderStatus,
+                        ProcessedEvent, StatusHistory)
 
 logger = logging.getLogger("tracker.projection")
 
@@ -55,7 +57,7 @@ class Outcome(StrEnum):
     STALE = "stale"
     REJECTED_AUTHORITY = "rejected_authority"
     DUPLICATE_CREATION = "duplicate_creation"
-    INVALID_SKIPPED = "invalid_skipped"
+    DEAD_LETTERED = "dead_lettered"    # in dead_letter_events, not processed_events
 
 
 def utc_now() -> datetime:
@@ -74,6 +76,19 @@ def _opt_int(payload: dict[str, Any], key: str) -> int | None:
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     return None
+
+
+def _peek_ids(raw: bytes | None) -> tuple[str | None, str | None]:
+    """Best-effort event_id/order_id from a message that failed validation (for operators)."""
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+    pick = lambda v: v if isinstance(v, str) and 0 < len(v) <= 128 else None  # noqa: E731
+    return pick(data.get("event_id")), pick(data.get("order_id")) or pick(payload.get("order_id"))
 
 
 def _opt_datetime(value: Any) -> datetime | None:
@@ -144,15 +159,27 @@ class Projector:
             "state_version": event.state_version})
         return outcome
 
-    async def record_invalid(self, topic: str, partition: int, offset: int) -> None:
-        """Skip-mode only: remember that this offset held an uninterpretable message."""
-        marker = f"invalid:{topic}:{partition}:{offset}"
-        async with self.sessions() as session, session.begin():
-            if await session.get(ProcessedEvent, marker) is None:
-                session.add(ProcessedEvent(
-                    event_id=marker, topic=topic, kafka_partition=partition,
-                    kafka_offset=offset, outcome=Outcome.INVALID_SKIPPED.value,
-                    processed_at=self.clock()))
+    async def dead_letter(self, topic: str, partition: int, offset: int, raw: bytes | None,
+                          reason: str) -> bool:
+        """Record an uninterpretable message. Idempotent per Kafka position: returns False
+        if this position was already dead-lettered (e.g. redelivered after a crash)."""
+        position = (DeadLetterEvent.topic == topic, DeadLetterEvent.kafka_partition == partition,
+                    DeadLetterEvent.kafka_offset == offset)
+        event_id, order_id = _peek_ids(raw)
+        try:
+            async with self.sessions() as session, session.begin():
+                if await session.scalar(select(DeadLetterEvent.id).where(*position)) is not None:
+                    return False
+                session.add(DeadLetterEvent(
+                    topic=topic, kafka_partition=partition, kafka_offset=offset,
+                    reason=reason[:300], event_id=event_id, order_id=order_id,
+                    raw_value=None if raw is None else raw[:DEAD_LETTER_MAX_BYTES],
+                    raw_size=0 if raw is None else len(raw),
+                    truncated=raw is not None and len(raw) > DEAD_LETTER_MAX_BYTES,
+                    received_at=self.clock()))
+        except IntegrityError:  # another replica recorded the same position first
+            return False
+        return True
 
     # ------------------------------------------------------------------ rules
     def _authorized(self, topic: str, event: Event) -> bool:

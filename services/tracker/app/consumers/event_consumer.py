@@ -90,10 +90,10 @@ class ConsumerStatus:
 
 
 class EventConsumer:
-    def __init__(self, source: EventSource, projector: Projector, *, skip_invalid: bool = False,
-                 status: ConsumerStatus | None = None):
+    def __init__(self, source: EventSource, projector: Projector, *,
+                 dead_letter_invalid: bool = True, status: ConsumerStatus | None = None):
         self.source, self.projector = source, projector
-        self.skip_invalid = skip_invalid
+        self.dead_letter_invalid = dead_letter_invalid
         self.status = status or ConsumerStatus()
 
     async def run_once(self) -> int:
@@ -118,17 +118,20 @@ class EventConsumer:
             return await self.projector.handle(record.topic, record.partition, record.offset,
                                                record.value)
         except InvalidEvent as error:
-            logger.error("invalid_event", extra={
-                "topic": record.topic, "partition": record.partition, "offset": record.offset,
-                "reason": str(error)})
-            if not self.skip_invalid:
-                raise  # stop here; the offset is NOT committed (see topics.md)
-            await self.projector.record_invalid(record.topic, record.partition, record.offset)
-            return Outcome.INVALID_SKIPPED
+            context = {"topic": record.topic, "partition": record.partition,
+                       "offset": record.offset, "reason": str(error)}
+            if not self.dead_letter_invalid:
+                logger.error("invalid_event_stopping", extra=context)
+                raise  # policy "stop": the offset is NOT committed
+            # Same DB-then-offset rule: the dead-letter row commits before the offset does.
+            await self.projector.dead_letter(record.topic, record.partition, record.offset,
+                                             record.value, str(error))
+            logger.error("invalid_event_dead_lettered", extra=context)
+            return Outcome.DEAD_LETTERED
 
 
 async def supervise(source_factory: Callable[[], EventSource], projector: Projector, *,
-                    status: ConsumerStatus, stop: asyncio.Event, skip_invalid: bool,
+                    status: ConsumerStatus, stop: asyncio.Event, dead_letter_invalid: bool,
                     backoff: float = 1.0, backoff_max: float = 30.0) -> None:
     """Keep a consumer running. On any failure: close it, wait, and start a fresh one,
     which resumes from the last COMMITTED offsets (the replay is safe by dedupe)."""
@@ -139,7 +142,8 @@ async def supervise(source_factory: Callable[[], EventSource], projector: Projec
             status.state = "starting"
             await source.start()
             status.state = "running"
-            consumer = EventConsumer(source, projector, skip_invalid=skip_invalid, status=status)
+            consumer = EventConsumer(source, projector, dead_letter_invalid=dead_letter_invalid,
+                                     status=status)
             while not stop.is_set():
                 if await consumer.run_once():
                     delay = backoff
@@ -186,7 +190,7 @@ async def _main() -> None:
             pass
     try:
         await supervise(lambda: KafkaEventSource(settings), projector, status=ConsumerStatus(),
-                        stop=stop, skip_invalid=settings.skip_invalid_events,
+                        stop=stop, dead_letter_invalid=settings.dead_letter_invalid,
                         backoff=settings.consumer_restart_backoff_seconds,
                         backoff_max=settings.consumer_restart_backoff_max_seconds)
     finally:

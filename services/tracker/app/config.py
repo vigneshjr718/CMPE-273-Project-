@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,7 +25,13 @@ class Settings(BaseSettings):
     consumer_max_records: int = Field(default=100, ge=1, le=1000)
     consumer_restart_backoff_seconds: float = Field(default=1.0, gt=0, le=60)
     consumer_restart_backoff_max_seconds: float = Field(default=30.0, gt=0, le=600)
-    skip_invalid_events: bool = False
+    # dead_letter: record unparseable messages in dead_letter_events and keep consuming.
+    # stop:        halt on them without committing the offset (consumer restarts and hits it again).
+    invalid_event_policy: Literal["dead_letter", "stop"] = "dead_letter"
+
+    @property
+    def dead_letter_invalid(self) -> bool:
+        return self.invalid_event_policy == "dead_letter"
 
     @field_validator("log_level")
     @classmethod
