@@ -30,3 +30,5 @@ services:
 # /ready endpoint does not certify worker progress. Explicitly bootstrap a new Kafka
 # group as documented in ORDER_CONSUMER.md; do not reset existing offsets silently.
 # Review C contracts before enabling the worker; use --order-id for isolated demos.
+# Concrete overlay for D's current topology: compose.integration.yaml.
+# Includes migration ordering and the separate processes; see TRACKER_INTEGRATION.md.

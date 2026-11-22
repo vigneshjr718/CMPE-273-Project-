@@ -1,0 +1,355 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "B workflow events v1 \u2014 current producer contract for A/C/D review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "producer",
+    "occurred_at",
+    "order_id",
+    "state_version",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "event_type": {
+      "enum": [
+        "workflow.accepted",
+        "workflow.started",
+        "line.quoting",
+        "line.reserving",
+        "line.reserved",
+        "line.reservation_rejected",
+        "line.unknown",
+        "line.reconciling",
+        "line.reconciliation_deferred",
+        "reconciliation.required",
+        "line.unfulfilled",
+        "line.delivery_updated",
+        "line.delivery_delayed",
+        "line.delivery_check_deferred",
+        "line.delivered",
+        "line.cancelling",
+        "line.cancellation_deferred",
+        "line.cancelled",
+        "line.replacement_started"
+      ]
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "producer": {
+      "const": "coordinator"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "order_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.:-]+$"
+    },
+    "state_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "PENDING",
+            "PROCESSING",
+            "RESERVED",
+            "PARTIALLY_RESERVED",
+            "FULFILLED",
+            "PARTIALLY_FULFILLED",
+            "UNFULFILLED",
+            "RECONCILIATION_REQUIRED"
+          ]
+        },
+        "line_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "part_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_status": {
+          "enum": [
+            "PENDING",
+            "QUOTING",
+            "RESERVING",
+            "RESERVED",
+            "UNKNOWN",
+            "RECONCILING",
+            "CANCELLATION_PENDING",
+            "REPLACING",
+            "DELIVERED",
+            "UNFULFILLED",
+            "RECONCILIATION_REQUIRED"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attempt_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "seller_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reservation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "replaces_attempt_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "estimated_delivery_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "delivered_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "delivery_status": {
+          "enum": [
+            null,
+            "IN_TRANSIT",
+            "DELIVERED"
+          ]
+        },
+        "delivery_status_version": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "source_status_version": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "retry_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "next_retry_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "cancellation_status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cancellation_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cancellation_receipt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cancellation_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cancellation_requests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "delivery_check_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cancellation_retry_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "lines": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/OrderLine"
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "OrderLine": {
+      "additionalProperties": false,
+      "properties": {
+        "line_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Line Id",
+          "type": "string"
+        },
+        "part_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Part Id",
+          "type": "string"
+        },
+        "quantity": {
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "title": "Quantity",
+          "type": "integer"
+        },
+        "needed_by": {
+          "format": "date-time",
+          "title": "Needed By",
+          "type": "string"
+        }
+      },
+      "required": [
+        "line_id",
+        "part_id",
+        "quantity",
+        "needed_by"
+      ],
+      "title": "OrderLine",
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "workflow.accepted"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": [
+              "status",
+              "lines"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "workflow.started"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": [
+              "status"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "not": {
+              "enum": [
+                "workflow.accepted",
+                "workflow.started"
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": [
+              "status",
+              "line_id",
+              "part_id",
+              "line_status",
+              "attempt_id"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

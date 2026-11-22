@@ -109,6 +109,7 @@ The constraints file includes test-package pins but they are installed only by
 requirements-dev.txt. Do not commit .env, virtual environments or test DBs.
 
 ## Guides and verification
+- [TRACKER_INTEGRATION.md](TRACKER_INTEGRATION.md): B/D contracts, deployment overlay and compatibility checks.
 - [INGESTION.md](INGESTION.md): transactional order acceptance and replay.
 - [RESERVATIONS.md](RESERVATIONS.md): persisted attempts and normal allocation.
 - [RECONCILIATION.md](RECONCILIATION.md): uncertain reservation recovery.

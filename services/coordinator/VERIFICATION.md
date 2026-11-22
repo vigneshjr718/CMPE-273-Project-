@@ -1,5 +1,36 @@
 # Coordinator verification
 
+## B/D contract and deployment preparation — November 22, 2026
+
+Base B code: f788c56. D PR #12 source:
+81e2f9f7d8f1c5fd5b45b6ae004527d63052a309. Python 3.12.
+
+- Full coordinator suite with the optional real D-source projection checks:
+  **249 passed, 15 skipped in 26.23 seconds**. PostgreSQL/Kafka are unavailable
+  in this preparation environment; their 15 opt-in checks were not rerun here.
+- The 25 added checks include 12 emitted-event schema cases, 12 cross-component
+  projection cases and one event-catalog drift check. B generates actual outbox
+  records; D's real decoder/projector/API view processes them in a fresh Python
+  interpreter against a temporary SQLite DB. Responses validate against D's
+  OpenAPI schema. Sellers and broker delivery order are controlled.
+- D's existing suite independently ran **41 passed, 3 skipped in 2.67 seconds**.
+  Its PostgreSQL opt-ins were not run. No D source was changed.
+- Compose v2.39.4 successfully rendered D's base file with B's integration overlay
+  using synthetic example config. Migration dependency ordering, isolated worker
+  profile and absence of worker host-port publication were checked. This is
+  configuration validation, not a running Docker/cloud deployment.
+- `pip check` and `git diff --check` passed. No runtime dependency/schema changes;
+  jsonschema and PyYAML were added only to development requirements.
+- Known D finding: cancellation followed by no stock produces UNFULFILLED with
+  a single CANCELLED attempt, but D currently returns replaced=true. See
+  TRACKER_INTEGRATION.md and contracts/status-values.md for the proposed meaning.
+  Projection/schema compatibility checks do not claim that flag semantics passed.
+- No live A producer, C seller, real B-to-D Kafka path, cloud rollout, shared
+  contract approval, main merge or teammate message is claimed by these checks.
+
+Reproduction and the deployment handoff are in TRACKER_INTEGRATION.md. The earlier
+real PostgreSQL/Kafka results below remain historical evidence, not new runs.
+
 Recorded November 20, 2026, against commit `5e529e8` on Python 3.12/macOS.
 Results are a historical run, not a guarantee of future test counts or live-neighbor
 compatibility. The full run used real coordinator PostgreSQL and Kafka.
@@ -68,3 +99,10 @@ in Git history; topic guides describe the current operation and contracts.
 - HTTP /ready checks DB/schema only, not separate workers or Kafka connectivity.
 - Live A/C/D contracts/integration, broader deployment checks, benchmarks and
   final diagrams/report remain pending. Instana instrumentation is deferred.
+
+## Coordinator–tracker integration verification — November 22, 2026
+- Full coordinator suite: 264 passed in 29.76 seconds; no skips.
+- PostgreSQL/Kafka opt-ins and separate D-source compatibility checks enabled.
+- pip check: No broken requirements found.
+- B/D projection checks use temporary SQLite and controlled sellers.
+- Live cloud/broker-to-tracker deployment remains pending.
