@@ -33,7 +33,7 @@ async def test_successful_probe_and_request_id():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             response = await client.get("/ready", headers={"X-Request-ID": "order-42"})
             assert response.status_code == 200
-            assert response.json()["workers"] == "not_implemented"
+            assert response.json()["workers"] == "not_started_in_http_process"
             assert response.headers["X-Request-ID"] == "order-42"
             response = await client.get("/health", headers={"X-Request-ID": "bad value"})
             assert response.headers["X-Request-ID"] != "bad value"

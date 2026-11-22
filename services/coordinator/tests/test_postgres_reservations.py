@@ -169,3 +169,55 @@ async def test_postgres_new_coordinator_reconciles_saved_unknown(postgres):
             count = await session.scalar(select(func.count()).select_from(model).where(
                 model.order_id == event.payload.order_id))
             assert count == expected
+
+
+async def test_postgres_relay_lock_excludes_another_connection(postgres):
+    from app.outbox.locking import RelayBusy, postgres_relay_lock
+    engine, _, _ = postgres
+    async with postgres_relay_lock(engine):
+        with pytest.raises(RelayBusy):
+            async with postgres_relay_lock(engine):
+                pytest.fail("two relay connections obtained the same lock")
+    async with postgres_relay_lock(engine):
+        pass
+
+
+async def test_postgres_outbox_recovers_acknowledged_event_after_marker_failure(postgres):
+    from app.outbox.locking import postgres_relay_lock
+    from app.outbox.publisher import OutboxRelay
+    from app.tools.demo_outbox import FailBeforeMarker, SimulatedMarkerFailure
+
+    engine, sessions, ids = postgres
+    event = make_event(ids)
+    order_id = event.payload.order_id
+    await accept_order(event, sessions, workflow_topic="workflow.events")
+    records = []
+    class AcknowledgingBroker:
+        async def publish(self, record):
+            # Broker fixture only; the companion opt-in Kafka test uses a real broker.
+            records.append(record)
+    kwargs = {"lock": lambda: postgres_relay_lock(engine)}
+    with pytest.raises(SimulatedMarkerFailure):
+        await FailBeforeMarker(sessions, AcknowledgingBroker(), **kwargs).run_once(order_id=order_id)
+    async with sessions() as session:
+        row = (await session.scalars(select(OutboxEvent).where(
+            OutboxEvent.order_id == order_id))).one()
+        assert row.published_at is None
+    assert await OutboxRelay(sessions, AcknowledgingBroker(), **kwargs).run_once(order_id=order_id) == 1
+    assert records[0] == records[1]
+    async with sessions() as session:
+        row = (await session.scalars(select(OutboxEvent).where(
+            OutboxEvent.order_id == order_id))).one()
+        assert row.published_at is not None
+
+
+async def test_real_postgres_kafka_outbox_round_trip_and_replay(postgres):
+    if os.getenv("COORDINATOR_KAFKA_TESTS") != "1":
+        pytest.skip("set COORDINATOR_KAFKA_TESTS=1 for the real broker replay check")
+    from app.tools.demo_outbox import run_demo
+    result = await run_demo(Settings(), cleanup=True)
+    assert result["published_outbox_rows"] == 5
+    assert result["broker_records"] == 6
+    assert result["distinct_event_ids"] == 5
+    assert result["received_state_versions"] == [1, 1, 2, 3, 4, 5]
+    assert result["first_event_replayed_with_same_id_and_payload"]
