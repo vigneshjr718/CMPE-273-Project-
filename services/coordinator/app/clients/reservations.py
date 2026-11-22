@@ -35,6 +35,15 @@ class ReservationClient(QuoteClient, Protocol):
     ) -> ReservationReply: ...
 
 
+def validate_reply(reply, seller_id, line, operation_key):
+    if not isinstance(reply, ReservationReply):
+        raise ValueError("invalid reservation reply")
+    if (reply.seller_id != seller_id or reply.operation_key != operation_key
+        or reply.part_id != line.part_id or reply.quantity != line.quantity):
+        raise ValueError("reservation reply identity does not match persisted attempt")
+    return reply
+
+
 class HttpReservationClient(HttpQuoteClient):
     async def reserve(
         self, seller_id: str, order_id: str, line: OrderLine, operation_key: str,

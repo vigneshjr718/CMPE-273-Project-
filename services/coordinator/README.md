@@ -1,6 +1,6 @@
 # Coordinator - Package B
 
-This is Wendy's **component-local foundation**, following Alicia's structure.
+This is Wendy's **component-local implementation**, following Alicia's structure.
 No files belonging to A/C/D or root infrastructure are changed.
 
 ## Current status
@@ -10,10 +10,12 @@ Implemented: the component foundation below, transactional order acceptance
 seller adapters. Every attempt/key is saved before the external reservation call;
 confirmation and outgoing event are saved atomically. PostgreSQL session locks
 serialize order drivers. Repeating a completed reservation flow does not reserve
-again; ambiguous writes remain UNKNOWN for later reconciliation.
+again. Bounded lookup/same-key replay reconciliation is now implemented through
+a separate manual driver (see RECONCILIATION.md). Its budget and retry schedule
+are persisted, and uncertainty remains visible when it cannot be resolved.
 
-**Not implemented yet:** order Kafka consumer, automatic scheduling, lookup/retry
-reconciliation, cancellation/replacement, delivery polling, outbox relay and
+**Not implemented yet:** order Kafka consumer, automatic scheduling,
+cancellation/replacement, delivery polling, outbox relay and
 full recovery workers. The manual driver conservatively marks an interrupted
 RESERVING attempt UNKNOWN rather than creating a fresh reservation. There is
 deliberately no public endpoint that pretends to accept/process orders.
@@ -35,13 +37,13 @@ python -m pytest -q
 
 The default tests do not require Docker or a running seller/DB/broker. They use controlled
 HTTP fixtures and temporary **SQLite** databases for local schema/transaction
-checks. Opt-in PostgreSQL tests and their command are documented in RESERVATIONS.md.
+checks. Current opt-in PostgreSQL tests are documented in RECONCILIATION.md.
 Kafka integration tests are not yet present.
 
 To start the foundation:
 
 ```bash
-cp .env.example .env
+cp -n .env.example .env
 python -m uvicorn app.main:app --port 8002 --no-access-log
 ```
 
@@ -89,6 +91,7 @@ requirements-dev.txt. Do not commit .env, virtual environments or test DBs.
 
 ## Verification and next checkpoint
 See CHECKPOINT.md for historical foundation verification and INGESTION.md /
-RESERVATIONS.md for later increments. Run alembic upgrade head after this update;
-migration 0002 preserves existing accepted orders. Next: implement lookup/retry
-reconciliation, compensation and Kafka transport against agreed team contracts.
+RESERVATIONS.md / RECONCILIATION.md for later increments. Run alembic upgrade head after schema updates;
+migration 0002 preserves existing accepted orders. Reconciliation adds no new
+migration. Next: implement compensation, delivery polling, Kafka transport and
+automatic recovery against agreed team contracts.

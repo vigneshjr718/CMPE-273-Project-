@@ -138,3 +138,34 @@ async def test_postgres_two_coordinators_do_not_duplicate_reservation(postgres):
         if not first.done():
             first.cancel()
         await asyncio.gather(first, return_exceptions=True)
+
+
+async def test_postgres_new_coordinator_reconciles_saved_unknown(postgres):
+    from app.saga.reconciliation import Reconciler
+    from app.tools.demo_reconciliation import LostReplySellers
+
+    engine, sessions, ids = postgres
+    event = make_event(ids)
+    await accept_order(event, sessions, workflow_topic="workflow.events")
+    seller = LostReplySellers()
+    def coordinator():
+        return Coordinator(
+            sessions, seller, ["seller-1", "seller-2"],
+            lock=lambda oid: postgres_order_lock(engine, oid),
+            workflow_topic="workflow.events", timeout_seconds=10,
+        )
+    before = await coordinator().run_order(event.payload.order_id)
+    assert before["lines"][0]["status"] == "UNKNOWN"
+    # Fresh driver/session reads the durable attempt; remote ledger is a fixture.
+    after = await Reconciler(coordinator()).run_order(event.payload.order_id)
+    assert after["status"] == "RESERVED"
+    assert after["lines"][0]["attempt_id"] == before["lines"][0]["attempt_id"]
+    assert after["lines"][0]["operation_key"] == before["lines"][0]["operation_key"]
+    assert after["lines"][0]["retry_count"] == 1
+    assert after["state_version"] == 7
+    assert seller.reserve_calls == seller.lookup_calls == len(seller.records) == 1
+    async with sessions() as session:
+        for model, expected in ((LineAttempt, 1), (OutboxEvent, 7)):
+            count = await session.scalar(select(func.count()).select_from(model).where(
+                model.order_id == event.payload.order_id))
+            assert count == expected
