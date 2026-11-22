@@ -106,7 +106,9 @@ scripts/restore.sh --yes --replay-tracker /mnt/data/backups/<stamp>             
 scripts/restore.sh --yes --replay-tracker /mnt/data/backups/<stamp> tracker_db   # one DB
 docker compose -f infra/docker-compose.yml --profile apps up -d --wait
 ```
-- Each restored database is dropped and recreated from the dump.
+- Each restored database is dropped and recreated from the dump. Restoring `globals.sql` sets
+  role passwords back to their values at backup time. The next `up` (db-init) re-applies the
+  passwords from `infra/.env`.
 - **Kafka offsets:** a restored database is older than the consumer offsets saved in Kafka.
   - `--replay-tracker` rewinds the tracker's consumer group to the earliest offset. The tracker
     then re-reads every event. Events it already has are skipped by `event_id`, and the missing
@@ -130,21 +132,59 @@ docker compose -f infra/docker-compose.yml --profile apps up -d --wait
   `sudo cryptsetup luksAddKey /dev/disk/by-id/google-partstream-data --key-file /etc/luks/partstream-data.key`
 - What it protects against, and what it doesn't: see provision.md §3, "Security tradeoff".
 
+## Database roles and databases (db-init)
+
+- On **every** `up`, the one-shot `db-init` service runs `infra/db-init/*.sql` (owner C) as
+  the `postgres` superuser, before any app starts. Apps wait for it to succeed. This is why
+  new roles and databases also reach the VM's existing volume. Postgres's own "first start
+  only" init folder is not used.
+- The SQL is idempotent: it creates what is missing and re-applies passwords and ownership.
+  Each database is owned by its service role only, and PUBLIC cannot connect.
+- Passwords: each `<NAME>_DB_PASSWORD` in `infra/.env` becomes the psql variable
+  `<name>_db_password`. Compose also builds each service's `DATABASE_URL` from the same value.
+- Run it by hand (safe to repeat):
+  ```bash
+  docker compose -f infra/docker-compose.yml run --rm db-init
+  ```
+- If it fails, no app starts. `docker compose -f infra/docker-compose.yml logs db-init` names the
+  file and error (passwords are never printed). The usual cause is a `*_DB_PASSWORD` missing from
+  `infra/.env`. `deploy.sh` checks for that before starting.
+
+### One-time migration of the VM's infra/.env
+
+Older `infra/.env` files held `TRACKER_DATABASE_URL` / `COORDINATOR_DATABASE_URL`. Now one
+password per role is needed. On the VM:
+```bash
+cd ~/CMPE-273-Project-
+# 1. Make sure ~/partstream-secrets.txt has every role. Add the missing ones without
+#    touching existing values (TRACKER_DB_PASSWORD must stay what the tracker role uses today):
+for v in ORDER COORDINATOR TRACKER SELLER1 SELLER2 SELLER3 SELLER4 SELLER5; do
+  grep -q "^${v}_DB_PASSWORD=" ~/partstream-secrets.txt \
+    || echo "${v}_DB_PASSWORD=$(openssl rand -hex 16)" >> ~/partstream-secrets.txt
+done
+# 2. Copy those lines into infra/.env and drop the old URL lines:
+sed -i '/_DATABASE_URL=/d; /_DB_PASSWORD=/d' infra/.env
+grep '_DB_PASSWORD=' ~/partstream-secrets.txt >> infra/.env
+infra/cloud/deploy.sh tracker
+```
+
 ## Secrets
 
 - Created by `openssl rand -hex 16` into `~/partstream-secrets.txt` (mode 600, outside git)
   and copied into `infra/.env` (mode 600, git-ignored). `deploy.sh` refuses to run while
-  `infra/.env` still contains the `local_only` placeholders.
-- **Rotate a service password:** generate a new one, run `ALTER ROLE <role> PASSWORD '...'` in
-  Postgres, update the secrets file and `infra/.env`, then run `infra/cloud/deploy.sh <service>`.
+  `infra/.env` still contains the `local_only` placeholders or lacks a password the SQL needs.
+- **Rotate a service password:** generate a new value, put it in the secrets file and
+  `infra/.env`, then run `infra/cloud/deploy.sh <service>`. db-init applies it to the role, and
+  the service gets the new URL. Tested locally: the old password stops working.
 - `POSTGRES_PASSWORD` in `infra/.env` only takes effect when the volume is first created.
-  Changing it later needs `ALTER ROLE postgres` as well.
+  Changing it later needs `ALTER ROLE postgres` as well, because db-init logs in with it.
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
 | Site down from outside | `$C ps`; is the frontend running; firewall tags `http-server`; static IP still attached |
+| No app starts after deploy | `$C logs db-init kafka-init`: missing `*_DB_PASSWORD`, SQL error, or topic problem |
 | Tracker not ready | `/ready` checks: `database_and_migrations` failed → Postgres/credentials; consumer `restarting` → `$C logs kafka tracker` |
 | Kafka unhealthy | `$C logs --tail=200 kafka`; disk space; never delete `kafka-data` to "fix" it |
 | Disk full | `df -h /mnt/data`; `docker system df`; prune old images (`docker image prune`), old backups (`KEEP_BACKUPS`) |

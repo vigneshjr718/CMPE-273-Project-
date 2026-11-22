@@ -121,8 +121,9 @@ on the encrypted disk.
 umask 077
 {
   echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
-  echo "TRACKER_DB_PASSWORD=$(openssl rand -hex 16)"
-  echo "COORDINATOR_DB_PASSWORD=$(openssl rand -hex 16)"
+  for v in ORDER COORDINATOR TRACKER SELLER1 SELLER2 SELLER3 SELLER4 SELLER5; do
+    echo "${v}_DB_PASSWORD=$(openssl rand -hex 16)"
+  done
 } > ~/partstream-secrets.txt
 chmod 600 ~/partstream-secrets.txt
 ```
@@ -139,9 +140,12 @@ git clone https://github.com/vigneshjr718/CMPE-273-Project-.git ~/CMPE-273-Proje
 cd ~/CMPE-273-Project-            # trailing hyphen is part of the name
 git checkout feature/package-d-tracker
 cp infra/.env.example infra/.env && chmod 600 infra/.env
-# Edit infra/.env: replace every local_only / postgres_local_only value with the matching
-# secret from ~/partstream-secrets.txt (POSTGRES_PASSWORD, *_DATABASE_URL passwords).
+# Replace every local_only / postgres_local_only value with the matching line from
+# ~/partstream-secrets.txt (POSTGRES_PASSWORD and one <NAME>_DB_PASSWORD per service role).
 ```
+Compose builds each service's `DATABASE_URL` from its `<NAME>_DB_PASSWORD`, so there are no URL
+lines to edit. `deploy.sh` refuses to start if a password needed by `infra/db-init/*.sql` is
+missing.
 Start **without** `infra/docker-compose.dev.yml`. That file publishes Postgres/Kafka/API ports
 and is for laptops only. `deploy.sh` deploys the branch that is checked out
 (`feature/package-d-tracker` today). Name only the services whose code exists, because
@@ -153,10 +157,16 @@ To confirm that only the frontend publishes a host port, run
 `docker compose -f infra/docker-compose.yml --profile apps config | grep -A3 ports:`.
 Postgres and Kafka are reached only on the internal `partstream` network.
 
-## 7. Temporary: tracker role and database (until C's `infra/db-init/init.sql` lands)
+## 7. Roles and databases (db-init)
 
-`init.sql` only runs on an empty Postgres volume. Until C provides it, the tracker role and
-database were created by hand, using the generated password:
+Roles and databases come from `infra/db-init/*.sql` (owner C). The one-shot `db-init` service
+runs them on **every** start, before any app, with the passwords from `infra/.env`. So they also
+apply to this VM's existing volume. Details: runbook, "Database roles and databases (db-init)".
+That section also has the one-time `infra/.env` migration for VMs set up before db-init existed.
+
+**History:** before db-init existed, the tracker role and database on this VM were created by
+hand, as below. `init.sql` keeps the same names, so it adopts them: it re-applies
+`TRACKER_DB_PASSWORD` and the ownership, and leaves the data alone. Do not run this again.
 ```bash
 cd ~/CMPE-273-Project-
 PW=$(grep '^TRACKER_DB_PASSWORD=' ~/partstream-secrets.txt | cut -d= -f2)
@@ -166,8 +176,6 @@ CREATE ROLE tracker LOGIN PASSWORD :'pw';
 CREATE DATABASE tracker_db OWNER tracker;
 SQL
 ```
-When `init.sql` arrives, it must create the same role and database names. The existing volume
-is not re-initialized, so check that `init.sql` does not conflict, or apply its other parts by hand.
 
 ## 8. Verify after any rebuild or reboot
 

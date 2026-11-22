@@ -101,19 +101,21 @@ cp infra/.env.example infra/.env
 `infra/.env` is git-ignored. If a port is already taken on your machine (for example a local
 PostgreSQL on 5432), change `POSTGRES_HOST_PORT` / `KAFKA_HOST_PORT` there.
 
-**2. Start infrastructure only** (Postgres, Kafka, then create the topics)
+**2. Start infrastructure only** (Postgres, Kafka, then roles/databases and topics)
 ```bash
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d --wait postgres kafka
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml run --rm db-init
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml run --rm kafka-init
 ```
-`kafka-init` prints `ok <topic>` for each topic and exits 0. It is safe to re-run.
-(Don't rely on `up --wait kafka-init`: it can return before the topics exist.)
+`db-init` runs `infra/db-init/*.sql` with the `*_DB_PASSWORD` values from `infra/.env`, and
+`kafka-init` prints `ok <topic>` for each topic. Both exit 0 and are safe to re-run.
+(Don't rely on `up --wait` for these one-shot jobs: it can return before they finish.)
 
 **3. Start all application services**
 ```bash
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml --profile apps up -d --build
 ```
-Apps wait until Postgres is healthy and `kafka-init` has finished. A service whose
+Apps wait until Postgres is healthy and `db-init` and `kafka-init` have finished. A service whose
 `services/<name>/` folder is still a placeholder fails to build. To start only some, name
 them: `... --profile apps up -d --build tracker coordinator`.
 
@@ -150,4 +152,5 @@ docker compose -f infra/docker-compose.yml --profile apps up -d --build
 ```bash
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml --profile apps down -v
 ```
-After a wipe, Postgres re-runs `infra/db-init/` on the next start, and step 2 recreates the topics.
+After a wipe, the next start recreates the roles and databases (`db-init`, which runs
+`infra/db-init/*.sql` on every start), and step 2 recreates the topics.
