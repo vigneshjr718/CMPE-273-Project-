@@ -1,4 +1,4 @@
-"""Foundation only: schema is not evidence that recovery workers exist."""
+"""Coordinator-owned state; transactions/worker logic enforce behavior."""
 from datetime import datetime
 from uuid import uuid4
 
@@ -26,6 +26,22 @@ class Workflow(Base):
     __table_args__ = (CheckConstraint("state_version >= 0"),)
 
 
+class WorkflowJob(Base):
+    __tablename__ = "workflow_jobs"
+    order_id: Mapped[str] = mapped_column(ForeignKey("workflows.order_id"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(24), default="READY")
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=utc_now)
+    last_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    run_count: Mapped[int] = mapped_column(Integer, default=0)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(80))
+    __table_args__ = (
+        CheckConstraint("run_count >= 0"), CheckConstraint("failure_count >= 0"),
+        Index("ix_workflow_jobs_due", "next_run_at", "order_id"),
+    )
+
+
 class LineAttempt(Base):
     __tablename__ = "line_attempts"
     attempt_id: Mapped[str] = mapped_column(String(36), primary_key=True,
@@ -37,6 +53,9 @@ class LineAttempt(Base):
     operation_key: Mapped[str] = mapped_column(String(80), unique=True)
     status: Mapped[str] = mapped_column(String(40), default="RESERVING")
     reservation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    estimated_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    response_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -45,6 +64,64 @@ class LineAttempt(Base):
         CheckConstraint("attempt_number >= 1"),
         CheckConstraint("retry_count >= 0"),
         Index("ix_line_attempts_due", "status", "next_retry_at"),
+    )
+
+
+class WorkflowLine(Base):
+    __tablename__ = "workflow_lines"
+    order_id: Mapped[str] = mapped_column(ForeignKey("workflows.order_id"), primary_key=True)
+    line_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    part_id: Mapped[str] = mapped_column(String(128))
+    quantity: Mapped[int] = mapped_column(Integer)
+    needed_by: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(40), default="PENDING")
+    # Logical link verified under the order lock; avoids cyclic migration FKs.
+    current_attempt_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    __table_args__ = (
+        CheckConstraint("quantity > 0"),
+        CheckConstraint("attempt_count >= 0"),
+    )
+
+
+class DeliveryCheck(Base):
+    __tablename__ = "delivery_checks"
+    attempt_id: Mapped[str] = mapped_column(ForeignKey("line_attempts.attempt_id"), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("workflows.order_id"))
+    line_id: Mapped[str] = mapped_column(String(128))
+    poll_count: Mapped[int] = mapped_column(Integer, default=0)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(80))
+    status_version: Mapped[int | None] = mapped_column(Integer)
+    last_payload: Mapped[dict | None] = mapped_column(JSON)
+    __table_args__ = (
+        CheckConstraint("poll_count >= 0"),
+        CheckConstraint("failure_count >= 0"),
+        CheckConstraint("status_version IS NULL OR status_version >= 1"),
+        Index("ix_delivery_checks_due", "next_poll_at"),
+    )
+
+
+class CancellationCheck(Base):
+    __tablename__ = "cancellation_checks"
+    attempt_id: Mapped[str] = mapped_column(ForeignKey("line_attempts.attempt_id"), primary_key=True)
+    order_id: Mapped[str] = mapped_column(ForeignKey("workflows.order_id"))
+    line_id: Mapped[str] = mapped_column(String(128))
+    cancellation_key: Mapped[str] = mapped_column(String(80), unique=True)
+    status: Mapped[str] = mapped_column(String(40), default="PENDING")
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(80))
+    status_version: Mapped[int | None] = mapped_column(Integer)
+    last_payload: Mapped[dict | None] = mapped_column(JSON)
+    __table_args__ = (
+        CheckConstraint("request_count >= 0"),
+        CheckConstraint("status_version IS NULL OR status_version >= 1"),
+        Index("ix_cancellation_checks_due", "status", "next_retry_at"),
     )
 
 

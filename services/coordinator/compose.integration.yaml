@@ -1,0 +1,64 @@
+# B-owned overlay for D's infra/docker-compose.yml; paths resolve relative to infra/.
+# Use the commands in TRACKER_INTEGRATION.md. Does not publish host ports.
+x-coordinator-runtime: &coordinator-runtime
+  profiles: [apps]
+  build:
+    context: ../services/coordinator
+  restart: unless-stopped
+  env_file:
+    - path: ../services/coordinator/.env
+      required: false
+  environment: &coordinator-environment
+    COORDINATOR_DATABASE_URL: postgresql+asyncpg://coordinator:${COORDINATOR_DB_PASSWORD:?set COORDINATOR_DB_PASSWORD in infra/.env}@postgres:5432/coordinator_db
+    COORDINATOR_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    COORDINATOR_INCOMING_TOPIC: order.created
+    COORDINATOR_WORKFLOW_TOPIC: workflow.events
+    COORDINATOR_CONSUMER_GROUP: coordinator-v1
+    COORDINATOR_SELLER_URLS: '{"seller-1":"http://seller-1:8101","seller-2":"http://seller-2:8102","seller-3":"http://seller-3:8103","seller-4":"http://seller-4:8104","seller-5":"http://seller-5:8105"}'
+  depends_on: &coordinator-dependencies
+    coordinator-migrate:
+      condition: service_completed_successfully
+    kafka-init:
+      condition: service_completed_successfully
+  networks: [partstream]
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  stop_grace_period: 45s
+
+services:
+  coordinator-migrate:
+    <<: *coordinator-runtime
+    restart: "no"
+    command: [python, -m, alembic, upgrade, head]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+
+  coordinator:
+    environment: *coordinator-environment
+    depends_on: *coordinator-dependencies
+    stop_grace_period: 45s
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8002/ready', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  coordinator-intake:
+    <<: *coordinator-runtime
+    command: [python, -m, app.tools.consume_orders, --watch]
+
+  coordinator-worker:
+    <<: *coordinator-runtime
+    # Explicit opt-in until C's APIs/fencing have been checked with their owner.
+    profiles: [coordinator-workflows]
+    command: [python, -m, app.tools.run_workflows, --watch]
+
+  coordinator-relay:
+    <<: *coordinator-runtime
+    command: [python, -m, app.tools.publish_outbox, --watch]

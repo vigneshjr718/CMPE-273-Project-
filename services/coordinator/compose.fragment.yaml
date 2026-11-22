@@ -21,3 +21,14 @@ services:
 # Run coordinator Alembic migrations separately before launching the service.
 # Compose env_file does not provide interpolation values for ${...}; configure
 # D's root .env/shell accordingly. /health is liveness, /ready checks DB/schema.
+
+# Optional separate process proposals for D, using the SAME image/env as coordinator:
+# coordinator-intake: command: ["python", "-m", "app.tools.consume_orders", "--watch"]
+# coordinator-worker: command: ["python", "-m", "app.tools.run_workflows", "--watch"]
+# coordinator-relay: command: ["python", "-m", "app.tools.publish_outbox", "--watch"]
+# Use restart: unless-stopped and process-appropriate health supervision. The HTTP
+# /ready endpoint does not certify worker progress. Explicitly bootstrap a new Kafka
+# group as documented in ORDER_CONSUMER.md; do not reset existing offsets silently.
+# Review C contracts before enabling the worker; use --order-id for isolated demos.
+# Concrete overlay for D's current topology: compose.integration.yaml.
+# Includes migration ordering and the separate processes; see TRACKER_INTEGRATION.md.

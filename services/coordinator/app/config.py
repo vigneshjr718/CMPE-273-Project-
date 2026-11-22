@@ -21,6 +21,28 @@ class Settings(BaseSettings):
     incoming_topic: str = "order.created"
     workflow_topic: str = "workflow.events"
     consumer_group: str = "coordinator-v1"
+    reconciliation_max_cycles: int = Field(default=3, ge=1, le=10)
+    reconciliation_backoff_seconds: float = Field(default=1.0, gt=0, le=60)
+    outbox_batch_size: int = Field(default=50, ge=1, le=1000)
+    outbox_poll_seconds: float = Field(default=1.0, gt=0, le=60)
+    kafka_operation_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    delivery_poll_seconds: float = Field(default=10.0, gt=0, le=300)
+    delivery_poll_concurrency: int = Field(default=5, ge=1, le=20)
+
+    cancellation_max_cycles: int = Field(default=3, ge=1, le=10)
+    cancellation_backoff_seconds: float = Field(default=1.0, gt=0, le=60)
+
+    incoming_batch_size: int = Field(default=10, ge=1, le=100)
+    incoming_poll_ms: int = Field(default=1000, ge=1, le=10000)
+    incoming_max_event_bytes: int = Field(default=1048576, ge=1, le=1048576)
+    incoming_database_timeout_seconds: float = Field(default=10, gt=0, le=60)
+
+    scheduler_batch_size: int = Field(default=20, ge=1, le=100)
+    scheduler_concurrency: int = Field(default=3, ge=1, le=10)
+    scheduler_poll_seconds: float = Field(default=1, gt=0, le=60)
+    scheduler_order_timeout_seconds: float = Field(default=30, gt=0, le=600)
+    scheduler_retry_seconds: float = Field(default=2, gt=0, le=60)
+    scheduler_max_failures: int = Field(default=5, ge=1, le=20)
 
     @field_validator("log_level")
     @classmethod

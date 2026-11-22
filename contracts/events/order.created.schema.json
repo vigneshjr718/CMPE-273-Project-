@@ -1,0 +1,111 @@
+{
+  "$defs": {
+    "OrderCreatedPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "order_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Order Id",
+          "type": "string"
+        },
+        "lines": {
+          "items": {
+            "$ref": "#/$defs/OrderLine"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Lines",
+          "type": "array"
+        }
+      },
+      "required": [
+        "order_id",
+        "lines"
+      ],
+      "title": "OrderCreatedPayload",
+      "type": "object"
+    },
+    "OrderLine": {
+      "additionalProperties": false,
+      "properties": {
+        "line_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Line Id",
+          "type": "string"
+        },
+        "part_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Part Id",
+          "type": "string"
+        },
+        "quantity": {
+          "exclusiveMinimum": 0,
+          "maximum": 10000,
+          "title": "Quantity",
+          "type": "integer"
+        },
+        "needed_by": {
+          "format": "date-time",
+          "title": "Needed By",
+          "type": "string"
+        }
+      },
+      "required": [
+        "line_id",
+        "part_id",
+        "quantity",
+        "needed_by"
+      ],
+      "title": "OrderLine",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "format": "uuid",
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "const": "order.created",
+      "title": "Event Type",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "producer": {
+      "const": "order",
+      "title": "Producer",
+      "type": "string"
+    },
+    "occurred_at": {
+      "format": "date-time",
+      "title": "Occurred At",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/OrderCreatedPayload"
+    }
+  },
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "producer",
+    "occurred_at",
+    "payload"
+  ],
+  "title": "Current B intake shape; proposed to A/D, not a new approved shared envelope",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

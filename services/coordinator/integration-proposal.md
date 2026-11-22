@@ -66,7 +66,7 @@ Topic names/order keys and actual workflow event envelope/names remain pending.
 The schema's unique (order_id, state_version) constraint encodes this proposal.
 
 ## Draft state guards
-UNKNOWN -> RECONCILING; no direct UNKNOWN -> UNFULFILLED or REPLACING.
+UNKNOWN -> RECONCILING or CANCELLATION_PENDING; no direct UNKNOWN -> UNFULFILLED or REPLACING.
 RESERVED -> CANCELLATION_PENDING before REPLACING.
 CANCELLATION_PENDING -> REPLACING requires durable proof of cancellation.
 CANCELLATION_PENDING -> DELIVERED requires confirmed delivery instead.
@@ -75,10 +75,10 @@ without side effects. Never use this path for a timeout.
 RECONCILIATION_REQUIRED remains visible and can resume; it is not success.
 DELIVERED/UNFULFILLED are terminal for this proposed line workflow.
 
-State guards restrict allowed names; future orchestration must also verify the
+State guards restrict allowed names; orchestration also validates the durable
 evidence needed for each transition. An enum alone does not enforce a Saga.
 
-## Message transaction rules for next checkpoint
+## Message transaction rules
 - Consume order: inbox record + workflow creation in one local transaction.
 - Transition: state + next order version + outbox event in one transaction.
 - Offset acknowledgment follows durable local commit.
@@ -91,3 +91,92 @@ A: Please supply order.created schema/example and required fields.
 C: Please confirm quote, reserve, lookup and cancel/fencing wire contracts.
 D: Please confirm topics, partition keys, envelope and version semantics, plus
 coordinator_db role and internal connection/service names with C.
+
+## Delivery observations: additional draft for C/D review
+
+GET /reservations/{reservation_id}/delivery returns seller_id, operation_key,
+reservation_id, part_id, quantity, status (IN_TRANSIT or DELIVERED), status_version,
+estimated_delivery_at and delivered_at. IN_TRANSIT requires an aware ETA and no
+delivery timestamp. DELIVERED requires an aware delivered_at timestamp.
+
+status_version must be a strictly increasing integer PER RESERVATION when the
+observation changes, stable on repeated identical reads and never reset while
+that reservation exists, including after seller restart. B uses this counter,
+not wall-clock timestamps, to reject stale/conflicting replies. This requirement
+is a proposal to C, NOT a verified feature of C's implementation. If the agreed
+API differs, translate it in app/clients/delivery.py and revisit version safety
+before live integration. Do not derive an ordering counter from timestamps.
+
+The adapter checks the exact saved seller/key/reservation/part/quantity. 404,
+timeouts and malformed replies are observation failures, not cancellation or
+delivery proof. Only known RESERVED attempts are polled. Cancellation and
+replacement remain separate work; polling does not create reservation attempts.
+
+Events proposed for D: line.delivery_updated, line.delivery_delayed,
+line.delivery_check_deferred and line.delivered. Same per-order B state_version
+and outbox protocol. Added per-line snapshot fields expose the last known
+delivery observation, source version, poll failure and next scheduled check.
+Repeated identical observations/failures do not create duplicate progress events.
+Confirmed all-line delivery produces order FULFILLED; a mix of delivered and
+unfulfilled lines produces PARTIALLY_FULFILLED. DELIVERED_AFTER_DEADLINE remains
+visible as a lateness reason even when all actual deliveries are complete.
+
+
+## Terminal fencing and replacement proposal
+
+See [REPLACEMENT.md](REPLACEMENT.md) for the complete provisional cancellation
+endpoint, payload, terminal receipt and shared source-version requirements.
+No C implementation was available on the inspected remote branches on November
+20, 2026; these guarantees remain unapproved and unverified against C.
+UNKNOWN may enter CANCELLATION_PENDING when the manual replacement command
+explicitly requests fencing by original operation key. No reservation ID is
+needed to request that fence; 404 is never a substitute for terminal proof.
+
+A CANCELLED response must prove no past delivery and no possible future effect
+from the original operation, including in-flight requests and replays. If C
+cannot guarantee this, cancellation remains PENDING and no safe replacement
+is confirmed. B persists proof and revalidates it before every successor write.
+A quote-only RECONCILIATION_REQUIRED line can resume QUOTING for replacement
+only when all previous attempts are rejected or have valid cancellation proof.
+
+Additional D events: line.cancelling, line.cancellation_deferred, line.cancelled,
+line.replacement_started. Existing line.reserving adds replaces_attempt_id.
+Current-attempt snapshots add cancellation status/key/count/error/receipt and
+next retry. Prior attempts and receipts remain auditable after ownership changes.
+All event/state transitions retain the same local transaction/outbox rules.
+
+
+## Incoming Kafka transport proposal for A/D
+
+See ORDER_CONSUMER.md for the full wire/failure policy. Incoming messages use
+UTF-8 JSON OrderCreatedEvent and exact UTF-8 payload.order_id as the Kafka key.
+Headers are not authoritative. Topics/group names remain provisional; no new
+A/D source/contracts were available in inspected remote branches November20.
+
+B disables auto-commit, reads committed Kafka transactions, and explicitly commits
+only the current partition's next offset after transactional accept_order returns.
+A duplicate event/order is durably handled according to the existing handler;
+a conflicting business payload or invalid envelope stops intake without skipping
+that record or later prefetched records. No dead-letter wire contract or automatic
+offset reset is introduced. New groups require an explicit bootstrap choice.
+
+Input is accepted into PENDING/version1; acceptance is decoupled from Saga
+execution and outbox publication. Failures/rebalances can replay source records;
+DB inbox/workflow/outbox transactionality protects the acceptance effect. This
+is not a cross-system exactly-once claim. Durable scheduling and worker process restart recovery are documented in
+SCHEDULER.md; recorded controlled-demo evidence is in VERIFICATION.md. Live A/D compatibility is still pending.
+
+
+## Durable jobs and process boundaries
+
+Intake now saves a workflow_jobs row in its existing transaction. This is internal
+coordinator scheduling data, not an A/D wire contract change. A separate bounded
+worker resumes saved Saga/delivery work; Kafka intake, workflow worker, HTTP and
+outbox relay retain explicit process boundaries. See SCHEDULER.md.
+
+Known late reservations may automatically enter the existing provisional terminal
+fencing protocol. Unknown reservations reconcile with the original key first and
+park visibly on budget exhaustion; manual cancellation of an unknown operation
+remains an explicit decision. No absent neighbor guarantee becomes approved by
+adding scheduling. Controlled subprocess/HTTP fixtures do not prove C's live
+fencing or persistence. Physical dispatch/cancellation semantics still need review.
