@@ -15,9 +15,13 @@ a separate manual driver (see RECONCILIATION.md). Its budget and retry schedule
 are persisted, and uncertainty remains visible when it cannot be resolved.
 The saved outbox can now be published by a separate bounded Kafka relay CLI
 (see OUTBOX.md), using the original event ID/payload and order ID as the key.
+Delivery observations can now be checked with a separate per-order polling CLI
+(see DELIVERY.md). Poll schedules/backoff and versioned evidence are persisted.
+Late or unconfirmed overdue delivery remains visible; confirmed delivery can
+complete a line. No cancellation or replacement is triggered in this increment.
 
 **Not implemented yet:** order Kafka consumer, automatic scheduling,
-cancellation/replacement, delivery polling and
+cancellation/replacement and
 full recovery workers. The manual driver conservatively marks an interrupted
 RESERVING attempt UNKNOWN rather than creating a fresh reservation. There is
 deliberately no public endpoint that pretends to accept/process orders.
@@ -96,7 +100,7 @@ requirements-dev.txt. Do not commit .env, virtual environments or test DBs.
 ## Verification and next checkpoint
 See CHECKPOINT.md for historical foundation verification and INGESTION.md /
 RESERVATIONS.md / RECONCILIATION.md / OUTBOX.md for later increments. Run alembic upgrade head after schema updates;
-migration 0002 preserves existing accepted orders. Reconciliation adds no new
-migration. The outbox relay adds aiokafka but no migration.
-Next: implement compensation, delivery polling, incoming Kafka transport and
+migration 0003 adds delivery_checks while preserving accepted orders/attempts.
+The outbox relay adds aiokafka; delivery polling adds no dependency.
+Next: implement compensation/safe replacement, incoming Kafka transport and
 automatic recovery against agreed team contracts.

@@ -12,7 +12,7 @@ from app.clients.reservations import ReservationReply
 from app.config import Settings
 from app.consumers.order_created import accept_order
 from app.db import check_database, make_engine, make_sessions
-from app.models import LineAttempt, OutboxEvent, ProcessedEvent, Workflow, WorkflowLine
+from app.models import DeliveryCheck, LineAttempt, OutboxEvent, ProcessedEvent, Workflow, WorkflowLine
 from app.saga.locking import OrderBusy, postgres_order_lock
 from app.saga.orchestrator import Coordinator
 from app.schemas import OrderCreatedEvent, Quote
@@ -35,7 +35,7 @@ async def postgres():
             if ids:
                 async with engine.begin() as connection:
                     # Exact generated IDs only, not a database/table-wide reset.
-                    for model in (OutboxEvent, ProcessedEvent, LineAttempt, WorkflowLine, Workflow):
+                    for model in (DeliveryCheck, OutboxEvent, ProcessedEvent, LineAttempt, WorkflowLine, Workflow):
                         await connection.execute(delete(model).where(model.order_id.in_(ids)))
         finally:
             await engine.dispose()
@@ -221,3 +221,78 @@ async def test_real_postgres_kafka_outbox_round_trip_and_replay(postgres):
     assert result["distinct_event_ids"] == 5
     assert result["received_state_versions"] == [1, 1, 2, 3, 4, 5]
     assert result["first_event_replayed_with_same_id_and_payload"]
+
+
+async def test_postgres_delivery_schedule_survives_new_driver_and_completes(postgres):
+    from app.pollers.delivery_poller import DeliveryPoller
+    from app.tools.demo_delivery import DeliveryDemoSellers
+
+    engine, sessions, ids = postgres
+    event = make_event(ids)
+    order_id = event.payload.order_id
+    await accept_order(event, sessions, workflow_topic="workflow.events")
+    now = [datetime.now(timezone.utc)]
+    seller = DeliveryDemoSellers(lambda: now[0])
+    def coordinator():
+        return Coordinator(
+            sessions, seller, ["seller-1"],
+            lock=lambda oid: postgres_order_lock(engine, oid),
+            workflow_topic="workflow.events", clock=lambda: now[0], timeout_seconds=10,
+        )
+    await coordinator().run_order(order_id)
+    first = await DeliveryPoller(coordinator(), seller).run_order(order_id)
+    assert first["status"] == "RECONCILIATION_REQUIRED"
+    assert first["lines"][0]["reason"] == "DELIVERY_AFTER_DEADLINE"
+    assert first["state_version"] == 6
+    assert await DeliveryPoller(coordinator(), seller).run_order(order_id) == first
+    assert seller.delivery_calls == 1
+    now[0] += timedelta(seconds=11)
+    seller.finish_bumper = True
+    result = await DeliveryPoller(coordinator(), seller).run_order(order_id)
+    assert result["status"] == "FULFILLED" and result["state_version"] == 7
+    assert result["lines"][0]["attempt_id"] == first["lines"][0]["attempt_id"]
+    assert result["lines"][0]["next_delivery_poll_at"] is None
+    assert seller.reserve_calls == 1 and seller.delivery_calls == 2
+    async with sessions() as session:
+        check = (await session.scalars(select(DeliveryCheck).where(
+            DeliveryCheck.order_id == order_id))).one()
+        assert check.poll_count == 2 and check.status_version == 2
+
+
+async def test_postgres_delivery_claim_saved_before_http_and_order_lock_excludes_peer(postgres):
+    from app.pollers.delivery_poller import DeliveryPoller
+    from app.tools.demo_delivery import DeliveryDemoSellers
+
+    engine, sessions, ids = postgres
+    event = make_event(ids)
+    order_id = event.payload.order_id
+    await accept_order(event, sessions, workflow_topic="workflow.events")
+    entered, release = asyncio.Event(), asyncio.Event()
+    class BlockingSeller(DeliveryDemoSellers):
+        async def delivery(self, seller_id, reservation_id):
+            async with sessions() as session:
+                check = (await session.scalars(select(DeliveryCheck).where(
+                    DeliveryCheck.order_id == order_id))).one()
+                assert check.poll_count == 1 and check.next_poll_at is not None
+            entered.set()
+            await release.wait()
+            return await super().delivery(seller_id, reservation_id)
+    seller = BlockingSeller(lambda: datetime.now(timezone.utc))
+    def coordinator():
+        return Coordinator(sessions, seller, ["seller-1"],
+                           lock=lambda oid: postgres_order_lock(engine, oid),
+                           workflow_topic="workflow.events", timeout_seconds=10)
+    await coordinator().run_order(order_id)
+    first = asyncio.create_task(DeliveryPoller(coordinator(), seller).run_order(order_id))
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        with pytest.raises(OrderBusy):
+            await DeliveryPoller(coordinator(), seller).run_order(order_id)
+        release.set()
+        await first
+        assert seller.delivery_calls == 1
+    finally:
+        release.set()
+        if not first.done():
+            first.cancel()
+        await asyncio.gather(first, return_exceptions=True)

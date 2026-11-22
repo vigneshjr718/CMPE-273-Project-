@@ -1,7 +1,7 @@
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-SCHEMA_REVISION = "0002_reservation_flow"
+SCHEMA_REVISION = "0003_delivery_polling"
 
 
 def make_engine(url: str) -> AsyncEngine:
