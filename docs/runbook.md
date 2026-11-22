@@ -45,8 +45,10 @@ lives. Never paste its contents into chat, issues or git.
 C="docker compose -f infra/docker-compose.yml --profile apps"
 $C ps                                   # status and health
 $C logs -f --tail=100 tracker           # JSON logs (also shipped by the Ops Agent)
-infra/cloud/deploy.sh tracker           # pull the checked-out branch, rebuild, wait until healthy
-infra/cloud/deploy.sh                   # all app services (once every owner's service builds)
+infra/cloud/deploy.sh                   # pull the checked-out branch; build + start every app service
+                                        #   that has code + Dockerfile; prints the skipped placeholders
+infra/cloud/deploy.sh --list            # only show what would be deployed / skipped
+infra/cloud/deploy.sh tracker           # exactly this service (plus dependencies)
 DEPLOY_BRANCH=main infra/cloud/deploy.sh tracker   # switch branches (e.g. after the PR merges)
 ```
 Internal health checks (the ports are not published, so run them inside the network):

@@ -148,10 +148,12 @@ lines to edit. `deploy.sh` refuses to start if a password needed by `infra/db-in
 missing.
 Start **without** `infra/docker-compose.dev.yml`. That file publishes Postgres/Kafka/API ports
 and is for laptops only. `deploy.sh` deploys the branch that is checked out
-(`feature/package-d-tracker` today). Name only the services whose code exists, because
-placeholder services cannot be built yet:
+(`feature/package-d-tracker` today). With no arguments it starts every app service that has
+code and a Dockerfile, and prints which placeholders it skipped (today it deploys coordinator and
+tracker). Add service names to deploy only those:
 ```bash
-infra/cloud/deploy.sh tracker
+infra/cloud/deploy.sh --list    # preview
+infra/cloud/deploy.sh
 ```
 To confirm that only the frontend publishes a host port, run
 `docker compose -f infra/docker-compose.yml --profile apps config | grep -A3 ports:`.
