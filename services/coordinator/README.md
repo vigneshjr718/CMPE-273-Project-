@@ -26,7 +26,13 @@ Incoming Kafka order intake is available through a separate bounded/watch CLI
 (see ORDER_CONSUMER.md), with explicit offset commits after durable acceptance.
 It creates PENDING workflows without invoking sellers.
 
-**Not implemented yet:** automatic scheduling and full recovery workers. The manual driver conservatively marks an interrupted
+Durable workflow scheduling is now implemented in a separate worker process
+(see SCHEDULER.md). Intake creates a durable job atomically; due jobs resume
+reservation/reconciliation/delivery/cancellation work under the same order lock.
+A two-scenario OS-process restart demo is supplied for Mac verification.
+
+**Remaining:** live A/C/D integration, broader deployment/failure verification,
+benchmarks and final diagrams/report. The manual driver conservatively marks an interrupted
 RESERVING attempt UNKNOWN rather than creating a fresh reservation. There is
 deliberately no public endpoint that pretends to accept/process orders.
 
@@ -104,8 +110,8 @@ requirements-dev.txt. Do not commit .env, virtual environments or test DBs.
 ## Verification and next checkpoint
 See CHECKPOINT.md for historical foundation verification and INGESTION.md /
 RESERVATIONS.md / RECONCILIATION.md / OUTBOX.md for later increments. Run alembic upgrade head after schema updates;
-migration 0004 adds cancellation_checks while preserving accepted orders,
-attempts, delivery observations and saved outbox events.
+migration 0005 adds/backfills workflow_jobs while preserving accepted orders,
+attempts, cancellation/delivery evidence and saved outbox events.
 The outbox relay adds aiokafka; delivery polling adds no dependency.
-Next: automatic scheduling/full process restart recovery, then live integration
-and remaining benchmarks/report deliverables against agreed team contracts.
+Next: verify the process restart demo, integrate live neighbors, then finish
+benchmarks/report deliverables against agreed team contracts.

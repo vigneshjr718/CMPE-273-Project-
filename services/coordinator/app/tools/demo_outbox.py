@@ -12,7 +12,7 @@ from sqlalchemy import delete, func, select
 from app.config import Settings
 from app.consumers.order_created import accept_order
 from app.db import check_database, make_engine, make_sessions
-from app.models import DeliveryCheck, LineAttempt, OutboxEvent, ProcessedEvent, Workflow, WorkflowLine
+from app.models import DeliveryCheck, LineAttempt, OutboxEvent, ProcessedEvent, Workflow, WorkflowJob, WorkflowLine
 from app.outbox.kafka import kafka_publisher
 from app.outbox.locking import postgres_relay_lock
 from app.outbox.publisher import OutboxRelay, encode_record
@@ -139,7 +139,7 @@ async def run_demo(settings, *, cleanup=False):
         try:
             if cleanup:
                 async with engine.begin() as connection:
-                    for model in (DeliveryCheck, OutboxEvent, ProcessedEvent, LineAttempt, WorkflowLine, Workflow):
+                    for model in (WorkflowJob, DeliveryCheck, OutboxEvent, ProcessedEvent, LineAttempt, WorkflowLine, Workflow):
                         await connection.execute(delete(model).where(model.order_id == order_id))
                 if topic_created:
                     await asyncio.wait_for(admin.delete_topics([topic]), timeout)
