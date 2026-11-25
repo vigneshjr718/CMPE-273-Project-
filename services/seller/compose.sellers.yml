@@ -1,0 +1,101 @@
+# Seller blocks for infra/docker-compose.yml (owner: D). They replace the five
+# "PLACEHOLDER — owner: C" seller blocks one-for-one. Service names, ports (8101-8105),
+# network, profile and depends_on (*app-depends) are unchanged from D's placeholders.
+# D's docker-compose.dev.yml already publishes 127.0.0.1:810N for local development.
+#
+# What the image needs (all from env):
+#   config/seller-N.env  -> SELLER_ID, PORT, DELIVERY_HOURS, PRICE_MULTIPLIER, DB_HOST/NAME/USER
+#   infra/.env           -> SELLERN_DB_PASSWORD (same value db-init gives role sellerN)
+#                           SELLER_ADMIN_TOKEN (optional; empty = /admin/* disabled)
+#
+# Paste these into the `services:` section of infra/docker-compose.yml.
+
+  # Owner: C (one seller image, five instances, ports 8101-8105, seller1_db..seller5_db).
+  seller-1:
+    profiles: [apps]
+    build: &seller-build
+      context: ../services/seller
+    restart: unless-stopped
+    env_file:
+      - path: ../services/seller/config/seller-1.env
+        required: true
+    environment:
+      DB_PASSWORD: ${SELLER1_DB_PASSWORD:?set SELLER1_DB_PASSWORD in infra/.env}
+      ADMIN_TOKEN: ${SELLER_ADMIN_TOKEN:-}
+    expose: ["8101"]
+    healthcheck: &seller-health
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen(f'http://localhost:{os.environ[\"PORT\"]}/health', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  seller-2:
+    profiles: [apps]
+    build: *seller-build
+    restart: unless-stopped
+    env_file:
+      - path: ../services/seller/config/seller-2.env
+        required: true
+    environment:
+      DB_PASSWORD: ${SELLER2_DB_PASSWORD:?set SELLER2_DB_PASSWORD in infra/.env}
+      ADMIN_TOKEN: ${SELLER_ADMIN_TOKEN:-}
+    expose: ["8102"]
+    healthcheck: *seller-health
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  seller-3:
+    profiles: [apps]
+    build: *seller-build
+    restart: unless-stopped
+    env_file:
+      - path: ../services/seller/config/seller-3.env
+        required: true
+    environment:
+      DB_PASSWORD: ${SELLER3_DB_PASSWORD:?set SELLER3_DB_PASSWORD in infra/.env}
+      ADMIN_TOKEN: ${SELLER_ADMIN_TOKEN:-}
+    expose: ["8103"]
+    healthcheck: *seller-health
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  seller-4:
+    profiles: [apps]
+    build: *seller-build
+    restart: unless-stopped
+    env_file:
+      - path: ../services/seller/config/seller-4.env
+        required: true
+    environment:
+      DB_PASSWORD: ${SELLER4_DB_PASSWORD:?set SELLER4_DB_PASSWORD in infra/.env}
+      ADMIN_TOKEN: ${SELLER_ADMIN_TOKEN:-}
+    expose: ["8104"]
+    healthcheck: *seller-health
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+  seller-5:
+    profiles: [apps]
+    build: *seller-build
+    restart: unless-stopped
+    env_file:
+      - path: ../services/seller/config/seller-5.env
+        required: true
+    environment:
+      DB_PASSWORD: ${SELLER5_DB_PASSWORD:?set SELLER5_DB_PASSWORD in infra/.env}
+      ADMIN_TOKEN: ${SELLER_ADMIN_TOKEN:-}
+    expose: ["8105"]
+    healthcheck: *seller-health
+    depends_on: *app-depends
+    networks: [partstream]
+    logging: *default-logging
+
+# Also add to infra/.env.example (D's file):
+#   SELLER_ADMIN_TOKEN=local_only_admin   # team-only; enables /admin/* fault injection
