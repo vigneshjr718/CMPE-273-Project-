@@ -1,0 +1,603 @@
+openapi: 3.0.3
+info:
+  title: PartStream Seller API
+  version: 0.2.0
+  description: |
+    One codebase, five instances: seller-1 … seller-5 listen on ports 8101–8105
+    (`http://seller-N:810N` inside compose). Each instance owns its own database.
+    The coordinator (Package B) is the only intended caller of non-admin endpoints.
+
+    **Wire shapes match B's adapters** in `services/coordinator/app/clients/`
+    (`Quote`, `ReservationReply`, `CancellationReply`, `DeliveryReply`). B parses
+    with `extra="forbid"`, so reply objects contain exactly the fields listed here.
+
+    ## Guarantees
+
+    **Operation key.** `POST /reservations` requires `Idempotency-Key: <operation_key>`.
+    B persists the key before calling. Per key there is at most ONE stock effect,
+    ever, enforced by the database and durable across restarts.
+
+    | Situation | Reply |
+    |---|---|
+    | First reserve, stock available | `201` `status: RESERVED` |
+    | Same key + same body again | `200` same reply (`Idempotent-Replayed: true`), no new effect |
+    | Not enough stock / part not carried | `409` `status: REJECTED`, `reason: INSUFFICIENT_STOCK` / `PART_NOT_FOUND` (stored: retries get the same answer) |
+    | Key was cancelled/fenced | `409` `status: REJECTED`, `reason: OPERATION_CANCELLED`, `reservation_id: null` |
+    | Same key, DIFFERENT body (caller bug) | `409` error envelope `IDEMPOTENCY_KEY_REUSED` |
+
+    **Timeout = UNKNOWN.** Reconcile with `GET /reservations/by-key/{key}`.
+    `404 KEY_NOT_FOUND` means "no record yet": absence of evidence, NOT proof the
+    request cannot still commit. To make that impossible, fence the key.
+
+    **Terminal fencing.** `POST /reservation-operations/{key}/cancel` (header
+    `Idempotency-Key: <cancellation_key>`) works whether or not the seller has seen
+    the key. `status: CANCELLED` with `fenced: true` and a `cancellation_receipt`
+    attests that no delivery has happened and none can happen for that operation,
+    including an in-flight or replayed reserve with the original key. The fence,
+    the receipt and the stock release are one transaction and survive restarts.
+    Stock is restored exactly once however many cancels arrive (any cancellation
+    key); every repeat returns the same receipt and `status_version`.
+    A shipped (dispatched) reservation returns `202 PENDING` (cannot be stopped);
+    a delivered one returns `200 DELIVERED` (never fenced).
+
+    **status_version.** One monotonic integer per ORIGINAL operation key, shared by
+    delivery and cancellation observations. Bumped in the same transaction as every
+    observable change (ETA move, shipped, delivered, cancelled/fenced). Identical
+    re-reads return the same version; it never resets, including after restart.
+
+    ## Conventions
+    * Timestamps: ISO-8601 with offset (`2026-11-26T18:00:00+00:00`). Request
+      timestamps must be timezone-aware.
+    * Identifiers: `^[A-Za-z0-9_.:-]+$`, 1–128 chars (operation keys up to 200).
+    * Non-contract errors use `{"error": {"code", "message", "details"}}`.
+    * A `5xx`/timeout on a write is an UNKNOWN outcome, never "failed".
+servers:
+  - url: http://seller-1:8101
+    description: In-compose address (seller-N -> http://seller-N:810N)
+
+tags:
+  - name: health
+  - name: quotes
+  - name: reservations
+  - name: cancellation
+  - name: delivery
+  - name: admin
+    description: Team-only. Requires `X-Admin-Token`. Disabled when ADMIN_TOKEN is unset.
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness + DB connectivity
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /quotes:
+    post:
+      tags: [quotes]
+      summary: Non-binding quote for one line (read-only, holds no stock)
+      description: |
+        Safe to retry. The coordinator decides eligibility
+        (`available_quantity >= quantity` and `now <= estimated_delivery_at <= needed_by`).
+        A part the seller does not carry returns `available_quantity: 0`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/QuoteRequest"}
+      responses:
+        "200":
+          description: Quote
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Quote"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /reservations:
+    post:
+      tags: [reservations]
+      summary: Reserve stock (idempotent by operation key)
+      parameters:
+        - $ref: "#/components/parameters/OperationKeyHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReservationRequest"}
+      responses:
+        "201":
+          description: Reserved (first time for this key)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReservationReply"}
+        "200":
+          description: Replay of an earlier successful reserve (same key + body)
+          headers:
+            Idempotent-Replayed:
+              schema: {type: string, enum: ["true"]}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReservationReply"}
+        "409":
+          description: |
+            `status: REJECTED` reply (definitive; no stock taken by this key), OR the
+            error envelope `IDEMPOTENCY_KEY_REUSED` when the body differs from the
+            first request with this key.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ReservationReply"
+                  - $ref: "#/components/schemas/Error"
+        "400":
+          description: "`IDEMPOTENCY_KEY_REQUIRED`"
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /reservations/by-key/{operation_key}:
+    get:
+      tags: [reservations]
+      summary: Reconcile an UNKNOWN reserve
+      parameters:
+        - $ref: "#/components/parameters/OperationKeyPath"
+      responses:
+        "200":
+          description: |
+            `RESERVED` (reservation live or delivered) or `REJECTED` (rejected, or
+            fenced before any reserve: `reason: OPERATION_CANCELLED`).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReservationReply"}
+        "404":
+          description: "`KEY_NOT_FOUND`: no record yet. Absence of evidence only; fence to be sure."
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "409":
+          description: "`OPERATION_CANCELLED`: reserved, then cancelled. Use the cancellation endpoint for the receipt."
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+
+  /reservation-operations/{operation_key}/cancel:
+    post:
+      tags: [cancellation]
+      summary: Terminally fence an ORIGINAL operation key (cancel its reservation if any)
+      parameters:
+        - $ref: "#/components/parameters/OperationKeyPath"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          description: The coordinator's persisted cancellation key (echoed back as `cancellation_key`).
+          schema: {type: string, minLength: 1, maxLength: 200, pattern: "^[A-Za-z0-9._:-]+$"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CancelOperationRequest"}
+      responses:
+        "200":
+          description: |
+            Terminal evidence:
+            * `CANCELLED` + `fenced: true` + `cancellation_receipt`. Covers a cancelled
+              reservation, a tombstoned never-seen key, and a rejected key.
+            * `DELIVERED` + `delivered_at` (`fenced: false`, no receipt).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CancellationReply"}
+        "202":
+          description: "`PENDING`: dispatched, cannot be stopped. `fenced: false`, no receipt. Retry later."
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CancellationReply"}
+        "409":
+          description: "`OPERATION_MISMATCH`: part/quantity/reservation_id differ from the recorded operation. Nothing changed."
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "400":
+          description: "`IDEMPOTENCY_KEY_REQUIRED` (cancellation key missing)"
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "422": {$ref: "#/components/responses/ValidationError"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /reservations/{reservation_id}/delivery:
+    get:
+      tags: [delivery]
+      summary: Versioned delivery observation (polled by the coordinator)
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+      responses:
+        "200":
+          description: "`IN_TRANSIT` (with ETA) or `DELIVERED` (with delivered_at)"
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DeliveryReply"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: "`RESERVATION_CANCELLED`: no delivery observation exists. Never delivery proof."
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+
+  /reservations/{reservation_id}:
+    get:
+      tags: [reservations]
+      summary: Full internal view (debugging, demos). Not used by the coordinator.
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+      responses:
+        "200":
+          description: Found
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReservationView"}
+        "404": {$ref: "#/components/responses/NotFound"}
+
+  /admin/faults:
+    get:
+      tags: [admin]
+      summary: List active fault rules
+      security: [{AdminToken: []}]
+      responses:
+        "200":
+          description: Active rules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  faults:
+                    type: array
+                    items: {$ref: "#/components/schemas/FaultRule"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+    post:
+      tags: [admin]
+      summary: Add a fault rule (in-memory, per instance; cleared on restart)
+      security: [{AdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/FaultRuleCreate"}
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FaultRule"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+    delete:
+      tags: [admin]
+      summary: Clear all fault rules
+      security: [{AdminToken: []}]
+      responses:
+        "204": {description: Cleared}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+  /admin/reservations/{reservation_id}/delivery:
+    post:
+      tags: [admin]
+      summary: Demo control. Make a delivery late, ship it, or mark it delivered (bumps status_version).
+      security: [{AdminToken: []}]
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DeliveryUpdate"}
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReservationView"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409":
+          description: "`RESERVATION_CANCELLED` or `INVALID_TRANSITION`"
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+
+  /admin/inventory:
+    get:
+      tags: [admin]
+      summary: Current stock (tests, benchmarks, demo)
+      security: [{AdminToken: []}]
+      parameters:
+        - in: query
+          name: part_id
+          schema: {type: string}
+      responses:
+        "200":
+          description: Inventory rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  seller_id: {type: string}
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/InventoryItem"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+    post:
+      tags: [admin]
+      summary: Create a part or add units (tests, benchmarks, demo restock)
+      security: [{AdminToken: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/InventoryUpsert"}
+      responses:
+        "200":
+          description: Row after the change
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InventoryItem"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+
+components:
+  securitySchemes:
+    AdminToken:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
+
+  parameters:
+    OperationKeyHeader:
+      in: header
+      name: Idempotency-Key
+      required: true
+      description: The coordinator's persisted operation key.
+      schema: {type: string, minLength: 1, maxLength: 200, pattern: "^[A-Za-z0-9._:-]+$"}
+    OperationKeyPath:
+      in: path
+      name: operation_key
+      required: true
+      schema: {type: string, minLength: 1, maxLength: 200, pattern: "^[A-Za-z0-9._:-]+$"}
+    ReservationId:
+      in: path
+      name: reservation_id
+      required: true
+      schema: {type: string}
+
+  responses:
+    ValidationError:
+      description: "`VALIDATION_ERROR`"
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    NotFound:
+      description: "`RESERVATION_NOT_FOUND`"
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Forbidden:
+      description: "`ADMIN_FORBIDDEN` (wrong/missing token, or admin disabled)"
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unavailable:
+      description: |
+        `SELLER_UNAVAILABLE` (DB down or injected fault). The seller returns 503 only
+        before committing, but a timeout can hide either outcome.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string, example: KEY_NOT_FOUND}
+            message: {type: string}
+            details: {type: object, additionalProperties: true}
+
+    Health:
+      type: object
+      properties:
+        status: {type: string, example: ok}
+        service: {type: string, example: seller}
+        seller_id: {type: string, example: seller-1}
+        db: {type: string, example: ok}
+
+    QuoteRequest:
+      type: object
+      additionalProperties: false
+      required: [part_id, quantity, needed_by]
+      properties:
+        part_id: {type: string, example: PART-0001}
+        quantity: {type: integer, minimum: 1}
+        needed_by: {type: string, format: date-time}
+        order_id: {type: string, description: optional, for logs}
+        line_id: {type: string, description: optional, for logs}
+
+    Quote:
+      description: "Exactly B's schemas.Quote."
+      type: object
+      additionalProperties: false
+      required: [seller_id, part_id, available_quantity, estimated_delivery_at]
+      properties:
+        seller_id: {type: string, example: seller-1}
+        part_id: {type: string}
+        available_quantity: {type: integer, minimum: 0}
+        estimated_delivery_at: {type: string, format: date-time}
+
+    ReservationRequest:
+      type: object
+      additionalProperties: false
+      required: [order_id, line_id, part_id, quantity]
+      properties:
+        order_id: {type: string}
+        line_id: {type: string}
+        part_id: {type: string}
+        quantity: {type: integer, minimum: 1}
+        needed_by:
+          type: string
+          format: date-time
+          nullable: true
+          description: Part of the request fingerprint. Send the same value on retries.
+
+    ReservationReply:
+      description: "Exactly B's clients/reservations.ReservationReply."
+      type: object
+      additionalProperties: false
+      required: [seller_id, operation_key, part_id, quantity, status]
+      properties:
+        seller_id: {type: string}
+        operation_key: {type: string}
+        part_id: {type: string}
+        quantity: {type: integer}
+        status: {type: string, enum: [RESERVED, REJECTED]}
+        reservation_id: {type: string, nullable: true, description: "set iff RESERVED"}
+        estimated_delivery_at: {type: string, format: date-time, nullable: true, description: "set iff RESERVED"}
+        reason:
+          type: string
+          nullable: true
+          enum: [INSUFFICIENT_STOCK, PART_NOT_FOUND, OPERATION_CANCELLED, null]
+
+    CancelOperationRequest:
+      type: object
+      additionalProperties: false
+      required: [order_id, line_id, part_id, quantity]
+      properties:
+        order_id: {type: string}
+        line_id: {type: string}
+        part_id: {type: string}
+        quantity: {type: integer, minimum: 1}
+        reservation_id: {type: string, nullable: true, description: "null if the original reply was lost"}
+
+    CancellationReply:
+      description: "Exactly B's clients/cancellation.CancellationReply."
+      type: object
+      additionalProperties: false
+      required: [seller_id, operation_key, cancellation_key, part_id, quantity, reservation_id,
+                 status, status_version, fenced, cancellation_receipt, delivered_at]
+      properties:
+        seller_id: {type: string}
+        operation_key: {type: string}
+        cancellation_key: {type: string}
+        part_id: {type: string}
+        quantity: {type: integer}
+        reservation_id: {type: string, nullable: true}
+        status: {type: string, enum: [CANCELLED, PENDING, DELIVERED]}
+        status_version: {type: integer, minimum: 1}
+        fenced: {type: boolean, description: "true iff CANCELLED"}
+        cancellation_receipt: {type: string, nullable: true, description: "durable; set iff CANCELLED"}
+        delivered_at: {type: string, format: date-time, nullable: true, description: "set iff DELIVERED"}
+
+    DeliveryReply:
+      description: "Exactly B's clients/delivery.DeliveryReply."
+      type: object
+      additionalProperties: false
+      required: [seller_id, operation_key, reservation_id, part_id, quantity, status, status_version,
+                 estimated_delivery_at, delivered_at]
+      properties:
+        seller_id: {type: string}
+        operation_key: {type: string}
+        reservation_id: {type: string}
+        part_id: {type: string}
+        quantity: {type: integer}
+        status: {type: string, enum: [IN_TRANSIT, DELIVERED]}
+        status_version: {type: integer, minimum: 1}
+        estimated_delivery_at: {type: string, format: date-time, nullable: true}
+        delivered_at: {type: string, format: date-time, nullable: true}
+
+    ReservationView:
+      type: object
+      properties:
+        reservation_id: {type: string}
+        seller_id: {type: string}
+        operation_key: {type: string}
+        order_id: {type: string}
+        line_id: {type: string}
+        part_id: {type: string}
+        quantity: {type: integer}
+        unit_price_cents: {type: integer}
+        status: {type: string, enum: [RESERVED, CANCELLED, DELIVERED]}
+        delivery_status: {type: string, enum: [PENDING, SHIPPED, DELIVERED, CANCELLED]}
+        needed_by: {type: string, format: date-time, nullable: true}
+        estimated_delivery_at: {type: string, format: date-time}
+        is_late: {type: boolean}
+        status_version: {type: integer}
+        cancellation_receipt: {type: string, nullable: true}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        cancelled_at: {type: string, format: date-time, nullable: true}
+        delivered_at: {type: string, format: date-time, nullable: true}
+
+    DeliveryUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        delivery_status: {type: string, enum: [PENDING, SHIPPED, DELIVERED]}
+        estimated_delivery_at: {type: string, format: date-time}
+        delay_hours: {type: number, minimum: 0, exclusiveMinimum: true, description: Push the ETA back}
+
+    FaultRuleCreate:
+      type: object
+      required: [endpoint]
+      properties:
+        endpoint: {type: string, enum: ["*", quotes, reserve, cancel, lookup, delivery]}
+        delay_ms: {type: integer, minimum: 0, maximum: 120000, default: 0, description: Sleep before processing}
+        error_rate: {type: number, minimum: 0, maximum: 1, default: 0, description: "503 BEFORE any DB change"}
+        lost_reply_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0
+          description: |
+            Committed-but-reply-lost: the change IS committed, then the reply is
+            withheld for `lost_reply_hang_ms` (client times out) and finally 504.
+        lost_reply_hang_ms: {type: integer, minimum: 0, maximum: 300000, default: 30000}
+        remaining: {type: integer, minimum: 1, nullable: true, description: Fire on the next N matching requests only}
+
+    FaultRule:
+      allOf:
+        - $ref: "#/components/schemas/FaultRuleCreate"
+        - type: object
+          properties:
+            id: {type: string}
+            fired: {type: integer}
+
+    InventoryItem:
+      type: object
+      description: "Invariant: available + reserved + delivered = total (DB CHECK constraint)"
+      properties:
+        part_id: {type: string}
+        description: {type: string}
+        total_quantity: {type: integer}
+        available_quantity: {type: integer}
+        reserved_quantity: {type: integer}
+        delivered_quantity: {type: integer}
+        unit_price_cents: {type: integer}
+
+    InventoryUpsert:
+      type: object
+      required: [part_id, add_quantity]
+      properties:
+        part_id: {type: string}
+        add_quantity: {type: integer, minimum: 0}
+        description: {type: string}
+        unit_price_cents: {type: integer, minimum: 1}
