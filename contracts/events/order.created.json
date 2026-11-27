@@ -1,0 +1,14 @@
+{
+  "event_id": "7e2c91d6-bd7d-4ef8-8af6-9c9466eb79be",
+  "event_type": "order.created",
+  "schema_version": 1,
+  "producer": "order",
+  "occurred_at": "2030-01-08T17:00:00Z",
+  "payload": {
+    "order_id": "ord-example",
+    "lines": [
+      {"line_id": "ord-example-line-1", "part_id": "front-bumper", "quantity": 1, "needed_by": "2030-01-15T17:00:00Z"}
+    ]
+  }
+}
+
